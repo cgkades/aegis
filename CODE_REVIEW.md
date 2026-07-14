@@ -53,13 +53,43 @@ Rules of thumb:
 > findings are addressed and the suite is green, or until you run out of budget.
 >
 > ### Project context
-> <!-- FILL THIS IN -->
-> - What it does: `...`
-> - Entry points / startup path: `...`
-> - Stack: `...`
-> - Tests: `...` (how to run, current pass/coverage baseline if known)
-> - Caveats: e.g. "spec was written after the code — the code is the source of
->   truth"; "author has never run this — first-run success matters most".
+> - **What it does:** Aegis is a local-first, always-on personal voice/agent for
+>   Linux. It listens on-device for the wake phrase “Hey Aegis” (or CLI/hotkey),
+>   then opens a short-lived session with a configured LLM/voice backend, runs
+>   on-device tools under policy (fs/git/process/write/kubectl; argv-only shell
+>   when enabled), and tears the cloud session down when idle. Single-user
+>   trust model. Profiles: `mvp` (fs tools only), `standard` (+ git/process/write),
+>   `oncall` (+ structured kubectl). Providers include OpenAI Realtime, chat
+>   Completions, ChatGPT OAuth, Azure OpenAI, Bedrock, LiteLLM, Ollama, mock.
+> - **Non-negotiables (do not weaken):** (1) never stream mic audio to the cloud
+>   while idle; (2) private tools are client-side `function` tools executed by
+>   the daemon; (3) no `shell=True` — argv-only policy; (4) shell off in `mvp`;
+>   kubectl/oc/helm/sudo/ssh reserved DENY via shell; (5) secrets path globs
+>   never auto for `read_file`/shell; (6) API keys only via env / `.env` /
+>   `secrets.env`.
+> - **Entry points / startup path:** CLI `aegis` → `aegis.cli:main` (also
+>   `python -m aegis`). Important commands: `aegis daemon` (long-lived
+>   `aegisd` process: wake + IPC + sessions), `aegis session once --backend
+>   mock|…` (foreground one-shot session), `aegis doctor`, `aegis settings`
+>   (local settings UI), `aegis status` / `activation` / `config` / `auth`.
+>   Package layout: `src/aegis/` — `daemon.py`, `session/`, `voice/`, `wake/`,
+>   `tools/` (+ `builtin/`, `oncall/`), `llm/`, `mcp/`, `audio/`, `ui/`,
+>   `config/`, `ipc.py`. Behavioral contracts: `openspec/specs/`; architecture:
+>   `DESIGN.md`; agent notes: `AGENTS.md`.
+> - **Stack:** Python 3.12+, **uv**, Click CLI, pytest + coverage (≥80% gate),
+>   ruff. Audio/wake: PipeWire/PulseAudio, openWakeWord (default; Porcupine
+>   pluggable). Config under `~/.config/aegis/`; state/logs under
+>   `~/.local/state/aegis/`, `~/.local/share/aegis/`.
+> - **Tests:** `uv sync --all-extras` then `uv run pytest` (coverage enforced
+>   via pyproject), `uv run ruff check src tests`. Smoke: `uv run aegis doctor`
+>   and `uv run aegis session once --backend mock`.
+> - **Caveats:** Spec index is `SPEC.md` → `openspec/specs/` (current behavior)
+>   and `openspec/changes/` (planned only — cascaded STT/TTS, custom wake
+>   model, tray, GPT-Live, hybrid text+tool session are **not** current).
+>   Prefer specs for intent; design for architecture. Implementation spine is
+>   complete as of 2026-07-13 (multi-LLM + Azure + Bedrock shipped). Security
+>   and tool-policy bugs are high stakes — treat policy/approval/secret paths
+>   as critical surface.
 >
 > ### Ground rules
 > 1. **Establish a baseline first**: run the test suite and linter, record
