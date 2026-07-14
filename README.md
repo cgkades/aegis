@@ -29,8 +29,19 @@ uv run aegis config show
 uv run aegis doctor
 
 # LLM settings page (local browser UI)
-cp .env.example .env   # then edit OPENAI_API_KEY=
+cp .env.example .env   # then edit OPENAI_API_KEY= / LiteLLM keys as needed
 uv run aegis settings  # http://127.0.0.1:8765
+
+# Providers (Settings UI or --backend):
+#   realtime       — OpenAI Realtime duplex (API key)
+#   openai_api     — OpenAI Chat Completions (API key)
+#   chatgpt_oauth  — Sign in with ChatGPT (device code / paste token)
+#   litellm        — LiteLLM OpenAI-compatible proxy
+#   ollama         — local Ollama models
+#   mock           — offline dogfood
+
+uv run aegis auth login          # ChatGPT OAuth
+uv run aegis auth status
 
 # Offline dogfood (no API key)
 uv run aegis session once --backend mock
@@ -40,6 +51,11 @@ export OPENAI_API_KEY=sk-...
 # sudo apt install libportaudio2
 uv sync --extra audio
 uv run aegis session once --backend realtime
+
+# Local / proxy chat providers
+uv run aegis session once --backend ollama
+uv run aegis session once --backend litellm
+uv run aegis session once --backend openai_api
 ```
 
 ### Always-on daemon

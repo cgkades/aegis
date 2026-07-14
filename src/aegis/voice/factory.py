@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from aegis.config.schema import AegisConfig
+from aegis.config.schema import AegisConfig, SessionProvider
 from aegis.util.secrets import resolve_api_key
 from aegis.voice.gateway import CloudAudioGateway, default_gateway
 from aegis.voice.gpt_live import GptLiveVoiceSession
@@ -23,7 +23,7 @@ def create_voice_session(
     gateway: CloudAudioGateway | None = None,
     instructions: str | None = None,
 ) -> VoiceSession:
-    """Create a voice session for the configured or explicit backend."""
+    """Create a voice/chat session for the configured or explicit backend."""
     gw = gateway or default_gateway
     if backend is not None:
         provider = backend
@@ -33,6 +33,7 @@ def create_voice_session(
             if not isinstance(cfg.session.provider, str)
             else cfg.session.provider
         )
+    provider = str(provider).lower().replace("-", "_")
 
     if provider in {"mock"}:
         return MockVoiceSession(
@@ -41,13 +42,26 @@ def create_voice_session(
             reply_text="Mock Aegis online.",
         )
 
-    if provider in {"gpt_live", "gpt-live"}:
+    if provider in {"gpt_live", "gptlive"}:
         return GptLiveVoiceSession()
 
-    if provider in {"text_fallback", "hybrid_text_tools"}:
+    # Explicit text_fallback stub (legacy); hybrid uses chat client
+    if provider in {"text_fallback"}:
         return TextFallbackSession(cfg=cfg)
 
-    # default: realtime
+    # Chat / OpenAI-compatible providers → text chat session
+    if provider in {
+        "ollama",
+        "litellm",
+        "chatgpt_oauth",
+        "openai_api",
+        "hybrid_text_tools",
+    }:
+        from aegis.llm.chat_session import ChatLLMSession
+
+        return ChatLLMSession(cfg, provider=provider)
+
+    # default: realtime duplex
     if paths is not None:
         key = resolve_api_key(
             env_var=cfg.openai.api_key_env,
@@ -67,10 +81,29 @@ def create_voice_session(
 
 
 def provider_status(cfg: AegisConfig) -> dict[str, Any]:
+    from aegis.llm.chatgpt_oauth import status_dict
+    from aegis.llm.registry import probe_provider
+
+    current = (
+        cfg.session.provider.value
+        if hasattr(cfg.session.provider, "value")
+        else str(cfg.session.provider)
+    )
     return {
-        "configured": cfg.session.provider.value,
+        "configured": current,
         "model": cfg.session.model,
-        "realtime_available": True,
+        "realtime_available": bool(resolve_api_key(env_var=cfg.openai.api_key_env)),
+        "chatgpt_oauth": status_dict(cfg.llm.chatgpt_oauth.token_path),
+        "ollama": probe_provider(cfg, "ollama"),
+        "litellm": probe_provider(cfg, "litellm"),
         "gpt_live_available": False,
         "text_fallback_available": True,
+        "providers": [
+            SessionProvider.REALTIME.value,
+            SessionProvider.OPENAI_API.value,
+            SessionProvider.CHATGPT_OAUTH.value,
+            SessionProvider.LITELLM.value,
+            SessionProvider.OLLAMA.value,
+            SessionProvider.MOCK.value,
+        ],
     }

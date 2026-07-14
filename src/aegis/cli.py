@@ -109,11 +109,20 @@ def session_group() -> None:
 @click.option(
     "--backend",
     type=click.Choice(
-        ["realtime", "mock", "gpt_live", "text_fallback"],
+        [
+            "realtime",
+            "openai_api",
+            "chatgpt_oauth",
+            "litellm",
+            "ollama",
+            "mock",
+            "gpt_live",
+            "text_fallback",
+        ],
         case_sensitive=False,
     ),
     default="realtime",
-    help="Voice backend (mock needs no API key).",
+    help="LLM / voice backend.",
 )
 @click.option(
     "--max-seconds",
@@ -392,6 +401,83 @@ def settings_cmd(host: str, port: int, no_browser: bool) -> None:
     raise SystemExit(
         run_settings_server(host=host, port=port, open_browser=not no_browser)
     )
+
+
+@main.group("auth")
+def auth_group() -> None:
+    """ChatGPT OAuth and credential helpers."""
+
+
+@auth_group.command("status")
+@click.pass_context
+def auth_status_cmd(ctx: click.Context) -> None:
+    """Show ChatGPT OAuth sign-in status."""
+    from aegis.llm.chatgpt_oauth import status_dict
+
+    cfg = load_config(
+        ctx.obj.get("config_path"),
+        paths=ctx.obj["paths"],
+        profile=ctx.obj.get("profile"),
+        missing_ok=True,
+    )
+    st = status_dict(cfg.llm.chatgpt_oauth.token_path)
+    if st.get("signed_in"):
+        click.echo(f"signed_in: yes ({st.get('email') or 'account'})")
+    else:
+        click.echo("signed_in: no")
+        if st.get("expired") and st.get("email"):
+            click.echo("  token present but expired — run: aegis auth login")
+    click.echo(f"token_path: {cfg.llm.chatgpt_oauth.token_path}")
+
+
+@auth_group.command("login")
+@click.option("--no-browser", is_flag=True, help="Print URL only; do not open browser.")
+@click.pass_context
+def auth_login_cmd(ctx: click.Context, no_browser: bool) -> None:
+    """Sign in with ChatGPT (device code / browser)."""
+    from aegis.llm.chatgpt_oauth import login_with_device_code
+
+    cfg = load_config(
+        ctx.obj.get("config_path"),
+        paths=ctx.obj["paths"],
+        profile=ctx.obj.get("profile"),
+        missing_ok=True,
+    )
+    try:
+        result = login_with_device_code(
+            cfg.llm.chatgpt_oauth.token_path,
+            auth_base=cfg.llm.chatgpt_oauth.auth_base_url,
+            client_id=cfg.llm.chatgpt_oauth.client_id,
+            open_browser=not no_browser,
+        )
+    except Exception as exc:
+        click.echo(f"login failed: {exc}", err=True)
+        click.echo(
+            "Fallback: open Settings and paste an access token, "
+            "or use OPENAI_API_KEY for API access.",
+            err=True,
+        )
+        sys.exit(1)
+    click.echo(f"user_code: {result.get('user_code')}")
+    click.echo(f"verification_url: {result.get('verification_url')}")
+    click.echo(f"signed in as: {result.get('email') or '(ok)'}")
+    click.echo(f"saved: {result.get('token_path')}")
+
+
+@auth_group.command("logout")
+@click.pass_context
+def auth_logout_cmd(ctx: click.Context) -> None:
+    """Remove stored ChatGPT OAuth tokens."""
+    from aegis.llm.chatgpt_oauth import clear_tokens
+
+    cfg = load_config(
+        ctx.obj.get("config_path"),
+        paths=ctx.obj["paths"],
+        profile=ctx.obj.get("profile"),
+        missing_ok=True,
+    )
+    clear_tokens(cfg.llm.chatgpt_oauth.token_path)
+    click.echo("signed out")
 
 
 def _starter_toml() -> str:

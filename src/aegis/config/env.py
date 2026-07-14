@@ -99,6 +99,8 @@ def env_status(keys: list[str] | None = None) -> dict[str, dict[str, object]]:
 
     keys = keys or [
         "OPENAI_API_KEY",
+        "LITELLM_API_KEY",
+        "OLLAMA_API_KEY",
         "PICOVOICE_ACCESS_KEY",
         "OPENAI_REALTIME_URL",
         "AEGIS_PROFILE",

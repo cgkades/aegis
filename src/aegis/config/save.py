@@ -31,7 +31,6 @@ def _format_value(value: Any, indent: int = 0) -> str:
             return f"[{inner}]"
         if all(isinstance(x, (int, float, bool)) for x in value):
             return "[" + ", ".join(_format_value(x) for x in value) + "]"
-        # complex arrays not used in settings page
         return "[]"
     return f'"{_toml_escape(str(value))}"'
 
@@ -56,7 +55,6 @@ def config_to_toml(cfg: AegisConfig) -> str:
             if isinstance(value, dict):
                 emit_table(f"{path}.{key}", value)
 
-    # Top-level tables in stable order
     for name in (
         "app",
         "profile",
@@ -65,6 +63,7 @@ def config_to_toml(cfg: AegisConfig) -> str:
         "activation",
         "session",
         "openai",
+        "llm",
         "tools",
         "privacy",
         "observability",
@@ -101,6 +100,17 @@ def apply_llm_settings(
     api_key_env: str | None = None,
     realtime_url: str | None = None,
     log_level: str | None = None,
+    # multi-provider
+    openai_chat_base_url: str | None = None,
+    litellm_base_url: str | None = None,
+    litellm_api_key_env: str | None = None,
+    litellm_model: str | None = None,
+    ollama_base_url: str | None = None,
+    ollama_native_base_url: str | None = None,
+    ollama_model: str | None = None,
+    chatgpt_token_path: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> AegisConfig:
     """Return a copy of cfg with LLM-related fields updated."""
     data = cfg.model_dump(mode="json")
@@ -108,6 +118,7 @@ def apply_llm_settings(
         data["profile"]["name"] = profile
     if provider is not None:
         data["session"]["provider"] = provider
+        data["llm"]["chat_provider"] = provider
     if model is not None:
         data["session"]["model"] = model
     if voice is not None:
@@ -122,8 +133,31 @@ def apply_llm_settings(
         data["session"]["idle_timeout_s"] = int(idle_timeout_s)
     if api_key_env is not None:
         data["openai"]["api_key_env"] = api_key_env
+        data["llm"]["openai"]["api_key_env"] = api_key_env
     if realtime_url is not None:
         data["openai"]["realtime_url"] = realtime_url
+        data["llm"]["openai"]["realtime_url"] = realtime_url
+    if openai_chat_base_url is not None:
+        data["openai"]["chat_base_url"] = openai_chat_base_url
+        data["llm"]["openai"]["chat_base_url"] = openai_chat_base_url
     if log_level is not None:
         data["app"]["log_level"] = log_level
+    if litellm_base_url is not None:
+        data["llm"]["litellm"]["base_url"] = litellm_base_url
+    if litellm_api_key_env is not None:
+        data["llm"]["litellm"]["api_key_env"] = litellm_api_key_env
+    if litellm_model is not None:
+        data["llm"]["litellm"]["model"] = litellm_model
+    if ollama_base_url is not None:
+        data["llm"]["ollama"]["base_url"] = ollama_base_url
+    if ollama_native_base_url is not None:
+        data["llm"]["ollama"]["native_base_url"] = ollama_native_base_url
+    if ollama_model is not None:
+        data["llm"]["ollama"]["model"] = ollama_model
+    if chatgpt_token_path is not None:
+        data["llm"]["chatgpt_oauth"]["token_path"] = chatgpt_token_path
+    if temperature is not None:
+        data["llm"]["temperature"] = float(temperature)
+    if max_tokens is not None:
+        data["llm"]["max_tokens"] = int(max_tokens)
     return AegisConfig.model_validate(data)

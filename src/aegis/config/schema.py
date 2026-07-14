@@ -21,10 +21,25 @@ class WakeEngine(StrEnum):
 
 
 class SessionProvider(StrEnum):
+    """Voice/LLM backend.
+
+    - realtime: OpenAI Realtime API (API key) — full duplex voice
+    - openai_api: OpenAI Chat Completions / Responses via API key (cascaded voice later)
+    - chatgpt_oauth: ChatGPT account OAuth tokens (subscription path; chat + tools)
+    - litellm: OpenAI-compatible LiteLLM proxy
+    - ollama: local Ollama OpenAI-compatible API
+    - mock / gpt_live / text_fallback: dev / stubs
+    """
+
     REALTIME = "realtime"
+    OPENAI_API = "openai_api"
+    CHATGPT_OAUTH = "chatgpt_oauth"
+    LITELLM = "litellm"
+    OLLAMA = "ollama"
     GPT_LIVE = "gpt_live"
     TEXT_FALLBACK = "text_fallback"
     HYBRID_TEXT_TOOLS = "hybrid_text_tools"
+    MOCK = "mock"
 
 
 class HotkeyBackend(StrEnum):
@@ -155,7 +170,63 @@ class SessionConfig(BaseModel):
 class OpenAIConfig(BaseModel):
     api_key_env: str = "OPENAI_API_KEY"
     realtime_url: str = "wss://api.openai.com/v1/realtime"
+    chat_base_url: str = "https://api.openai.com/v1"
     keyring_service: str = "aegis"
+
+
+class ChatGptOAuthConfig(BaseModel):
+    """ChatGPT subscription OAuth credentials (not an API key)."""
+
+    enabled: bool = True
+    # Token file under XDG config (chmod 600)
+    token_path: str = "~/.config/aegis/credentials/chatgpt_oauth.json"
+    # Optional override for device/OAuth endpoints if OpenAI changes them
+    auth_base_url: str = "https://auth.openai.com"
+    # Client id used by Codex-style ChatGPT login (public desktop client)
+    client_id: str = "app_EMoamEEZ73f0CkXaXp7hrann"
+    # Prefer chat completions base when using OAuth bearer tokens
+    api_base_url: str = "https://api.openai.com/v1"
+
+    @field_validator("token_path")
+    @classmethod
+    def expand_token_path(cls, v: str) -> str:
+        return _expand_user_path(v)
+
+
+class LiteLLMConfig(BaseModel):
+    """OpenAI-compatible LiteLLM proxy."""
+
+    base_url: str = "http://127.0.0.1:4000/v1"
+    api_key_env: str = "LITELLM_API_KEY"
+    # When empty, many LiteLLM setups accept any non-empty key or "sk-1234"
+    default_api_key: str = "sk-litellm"
+    model: str = "gpt-4o-mini"
+
+
+class OllamaConfig(BaseModel):
+    """Local Ollama server (OpenAI-compatible /v1 endpoints)."""
+
+    base_url: str = "http://127.0.0.1:11434/v1"
+    # Native tags API is without /v1
+    native_base_url: str = "http://127.0.0.1:11434"
+    api_key_env: str = "OLLAMA_API_KEY"
+    # Ollama ignores key but OpenAI clients often require a value
+    default_api_key: str = "ollama"
+    model: str = "llama3.2"
+
+
+class LLMConfig(BaseModel):
+    """Multi-provider LLM settings used by settings UI and chat clients."""
+
+    # Active chat/LLM provider for non-realtime sessions (mirrors session.provider when set)
+    # Kept for clarity when session.provider is realtime but tools use a chat model.
+    chat_provider: SessionProvider = SessionProvider.OPENAI_API
+    temperature: float = Field(default=0.4, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=2048, ge=64)
+    openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
+    chatgpt_oauth: ChatGptOAuthConfig = Field(default_factory=ChatGptOAuthConfig)
+    litellm: LiteLLMConfig = Field(default_factory=LiteLLMConfig)
+    ollama: OllamaConfig = Field(default_factory=OllamaConfig)
 
 
 class ShellRule(BaseModel):
@@ -337,14 +408,19 @@ class AegisConfig(BaseModel):
     wake: WakeConfig = Field(default_factory=WakeConfig)
     activation: ActivationConfig = Field(default_factory=ActivationConfig)
     session: SessionConfig = Field(default_factory=SessionConfig)
+    # Top-level openai kept for backward compatibility with early configs
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     mcp: McpConfig = Field(default_factory=McpConfig)
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
 
     @model_validator(mode="after")
-    def validate_remote_mcp_privacy(self) -> AegisConfig:
+    def sync_openai_and_mcp(self) -> AegisConfig:
+        """Align openai blocks; validate remote MCP privacy."""
+        # Prefer explicit top-level openai when present (defaults match)
+        self.llm.openai = self.openai
         for server in self.mcp.remote.servers:
             if _looks_private_url(server.server_url) and not server.allow_private_server_url:
                 raise ValueError(

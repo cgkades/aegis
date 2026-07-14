@@ -3,287 +3,247 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Aegis Settings — LLM</title>
+  <title>Aegis Settings — LLMs</title>
   <style>
     :root {
-      --bg: #0b1220;
-      --panel: #121a2b;
-      --border: #243049;
-      --text: #e8eefc;
-      --muted: #93a0b8;
-      --accent: #5b9dff;
-      --accent2: #3dd6c6;
-      --danger: #ff6b7a;
-      --ok: #3ecf8e;
-      --input: #0e1626;
-      --radius: 12px;
+      --bg: #0b1220; --panel: #121a2b; --border: #243049; --text: #e8eefc;
+      --muted: #93a0b8; --accent: #5b9dff; --accent2: #3dd6c6; --danger: #ff6b7a;
+      --ok: #3ecf8e; --input: #0e1626; --radius: 12px;
       --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
     }
     * { box-sizing: border-box; }
     body {
-      margin: 0;
-      font-family: var(--font);
-      background: radial-gradient(1200px 600px at 10% -10%, #1a2a4a 0%, transparent 50%),
-                  radial-gradient(900px 500px at 100% 0%, #14352f 0%, transparent 45%),
-                  var(--bg);
-      color: var(--text);
-      min-height: 100vh;
+      margin: 0; font-family: var(--font); color: var(--text); min-height: 100vh;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #1a2a4a 0%, transparent 50%),
+        radial-gradient(900px 500px at 100% 0%, #14352f 0%, transparent 45%),
+        var(--bg);
     }
-    header {
-      padding: 28px 24px 8px;
-      max-width: 880px;
-      margin: 0 auto;
-    }
-    header h1 {
-      margin: 0 0 6px;
-      font-size: 1.6rem;
-      letter-spacing: -0.02em;
-    }
+    header { padding: 28px 24px 8px; max-width: 960px; margin: 0 auto; }
+    header h1 { margin: 0 0 6px; font-size: 1.6rem; letter-spacing: -0.02em; }
     header p { margin: 0; color: var(--muted); }
-    main {
-      max-width: 880px;
-      margin: 0 auto;
-      padding: 16px 24px 48px;
-      display: grid;
-      gap: 16px;
-    }
+    main { max-width: 960px; margin: 0 auto; padding: 16px 24px 48px; display: grid; gap: 16px; }
     .card {
       background: color-mix(in srgb, var(--panel) 92%, black);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 18px 18px 14px;
-      box-shadow: 0 10px 40px rgba(0,0,0,.25);
+      border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 18px; box-shadow: 0 10px 40px rgba(0,0,0,.25);
     }
-    .card h2 {
-      margin: 0 0 12px;
-      font-size: 1rem;
-      font-weight: 600;
-      color: var(--accent2);
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px 14px;
-    }
-    @media (max-width: 720px) {
-      .grid { grid-template-columns: 1fr; }
-    }
-    label {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      font-size: 0.82rem;
-      color: var(--muted);
-    }
+    .card h2 { margin: 0 0 12px; font-size: 1rem; font-weight: 600; color: var(--accent2); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+    label { display: flex; flex-direction: column; gap: 6px; font-size: 0.82rem; color: var(--muted); }
     label.full { grid-column: 1 / -1; }
     input, select, textarea {
-      background: var(--input);
-      border: 1px solid var(--border);
-      color: var(--text);
-      border-radius: 8px;
-      padding: 10px 12px;
-      font: inherit;
-      outline: none;
+      background: var(--input); border: 1px solid var(--border); color: var(--text);
+      border-radius: 8px; padding: 10px 12px; font: inherit; outline: none;
     }
     input:focus, select:focus, textarea:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(91,157,255,.15);
+      border-color: var(--accent); box-shadow: 0 0 0 3px rgba(91,157,255,.15);
     }
     .hint { font-size: 0.75rem; color: var(--muted); opacity: .9; }
-    .row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      align-items: center;
-      margin-top: 14px;
-    }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; }
     button {
-      appearance: none;
-      border: 0;
-      border-radius: 9px;
-      padding: 10px 16px;
-      font: inherit;
-      font-weight: 600;
-      cursor: pointer;
-      background: linear-gradient(180deg, #6aa8ff, #3d7fe0);
-      color: white;
+      appearance: none; border: 0; border-radius: 9px; padding: 10px 16px;
+      font: inherit; font-weight: 600; cursor: pointer;
+      background: linear-gradient(180deg, #6aa8ff, #3d7fe0); color: white;
     }
-    button.secondary {
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--text);
-    }
-    button.danger {
-      background: transparent;
-      border: 1px solid color-mix(in srgb, var(--danger) 50%, var(--border));
-      color: var(--danger);
-    }
+    button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+    button.danger { background: transparent; border: 1px solid color-mix(in srgb, var(--danger) 50%, var(--border)); color: var(--danger); }
     button:disabled { opacity: .5; cursor: not-allowed; }
-    .status {
-      margin-left: auto;
-      font-size: 0.85rem;
-      color: var(--muted);
-    }
-    .status.ok { color: var(--ok); }
-    .status.err { color: var(--danger); }
+    .status { margin-left: auto; font-size: 0.85rem; color: var(--muted); }
+    .status.ok { color: var(--ok); } .status.err { color: var(--danger); }
     .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 10px;
-      border-radius: 999px;
-      border: 1px solid var(--border);
-      font-size: 0.78rem;
-      color: var(--muted);
-      margin: 0 6px 6px 0;
+      display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+      border-radius: 999px; border: 1px solid var(--border); font-size: 0.78rem;
+      color: var(--muted); margin: 0 6px 6px 0;
     }
     .pill.on { border-color: color-mix(in srgb, var(--ok) 50%, var(--border)); color: var(--ok); }
     .pill.off { border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); color: var(--danger); }
     code {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 0.85em;
-      background: rgba(255,255,255,.04);
-      padding: 1px 6px;
-      border-radius: 4px;
+      font-size: 0.85em; background: rgba(255,255,255,.04); padding: 1px 6px; border-radius: 4px;
     }
-    .secret-box {
-      display: flex;
-      gap: 8px;
-      align-items: stretch;
-    }
+    .secret-box { display: flex; gap: 8px; align-items: stretch; }
     .secret-box input { flex: 1; }
+    .provider-panel { display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+    .provider-panel.active { display: block; }
+    .catalog { display: grid; gap: 8px; margin-bottom: 12px; }
+    .catalog-item {
+      border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: pointer;
+      background: rgba(0,0,0,.15);
+    }
+    .catalog-item.active { border-color: var(--accent); background: rgba(91,157,255,.08); }
+    .catalog-item strong { color: var(--text); }
+    .catalog-item span { display: block; color: var(--muted); font-size: 0.78rem; margin-top: 4px; }
+    pre {
+      margin: 12px 0 0; white-space: pre-wrap; color: var(--muted); font-size: 0.8rem;
+      max-height: 220px; overflow: auto;
+    }
   </style>
 </head>
 <body>
   <header>
     <h1>Aegis settings</h1>
-    <p>Configure LLM / Realtime voice provider. Secrets stay in <code>.env</code> (not git).</p>
+    <p>Configure LLM backends: OpenAI API / Realtime, ChatGPT OAuth, LiteLLM, or Ollama.</p>
   </header>
   <main>
     <section class="card">
-      <h2>Environment status</h2>
+      <h2>Environment</h2>
       <div id="env-pills"></div>
-      <p class="hint">Keys are loaded from project <code>.env</code>, <code>~/.config/aegis/.env</code>, and <code>secrets.env</code>. Values are never shown in full.</p>
+      <p class="hint">Secrets live in project <code>.env</code> (gitignored). Values never shown in full.</p>
     </section>
 
     <section class="card">
-      <h2>LLM &amp; voice session</h2>
+      <h2>Provider</h2>
+      <div class="catalog" id="catalog"></div>
       <form id="settings-form" class="grid">
         <label>
           Profile
           <select name="profile" id="profile">
-            <option value="mvp">mvp — fs tools, mini model</option>
-            <option value="standard">standard — git/process/write</option>
-            <option value="oncall">oncall — full model + kubectl</option>
+            <option value="mvp">mvp</option>
+            <option value="standard">standard</option>
+            <option value="oncall">oncall</option>
           </select>
         </label>
         <label>
           Provider
           <select name="provider" id="provider">
-            <option value="realtime">realtime (OpenAI Realtime API)</option>
-            <option value="mock">mock (offline dogfood)</option>
-            <option value="gpt_live">gpt_live (stub until API ships)</option>
-            <option value="text_fallback">text_fallback (stub)</option>
+            <option value="realtime">OpenAI Realtime (API key)</option>
+            <option value="openai_api">OpenAI Chat API (API key)</option>
+            <option value="chatgpt_oauth">ChatGPT account (OAuth)</option>
+            <option value="litellm">LiteLLM proxy</option>
+            <option value="ollama">Ollama (local)</option>
+            <option value="mock">Mock (offline)</option>
           </select>
         </label>
         <label>
           Model
-          <select name="model" id="model">
-            <option value="gpt-realtime-2.1-mini">gpt-realtime-2.1-mini (cheaper)</option>
-            <option value="gpt-realtime-2.1">gpt-realtime-2.1 (full)</option>
-            <option value="gpt-realtime-2">gpt-realtime-2</option>
-          </select>
-          <span class="hint">Or type a custom model id below.</span>
+          <input name="model" id="model" list="model-list" placeholder="model id" />
+          <datalist id="model-list"></datalist>
+          <span class="hint">Pick from probe results or type any model id.</span>
         </label>
         <label>
-          Custom model id (optional)
-          <input name="model_custom" id="model_custom" placeholder="leave blank to use dropdown" />
-        </label>
-        <label>
-          Voice
+          Voice (Realtime)
           <select name="voice" id="voice">
-            <option>alloy</option>
-            <option>ash</option>
-            <option>ballad</option>
-            <option>coral</option>
-            <option>echo</option>
-            <option>sage</option>
-            <option>shimmer</option>
-            <option>verse</option>
+            <option>alloy</option><option>ash</option><option>ballad</option>
+            <option>coral</option><option>echo</option><option>sage</option>
+            <option>shimmer</option><option>verse</option>
           </select>
         </label>
         <label>
           Reasoning effort
           <select name="reasoning_effort" id="reasoning_effort">
-            <option>minimal</option>
-            <option>low</option>
-            <option>medium</option>
-            <option>high</option>
-            <option>xhigh</option>
+            <option>minimal</option><option>low</option><option>medium</option>
+            <option>high</option><option>xhigh</option>
           </select>
+        </label>
+        <label>
+          Temperature
+          <input type="number" step="0.1" min="0" max="2" id="temperature" />
+        </label>
+        <label>
+          Max tokens
+          <input type="number" min="64" id="max_tokens" />
         </label>
         <label>
           Max session cost (USD)
-          <input type="number" step="0.01" min="0" name="max_session_cost_usd" id="max_session_cost_usd" />
+          <input type="number" step="0.01" min="0" id="max_session_cost_usd" />
         </label>
         <label>
-          Max duration (seconds)
-          <input type="number" min="30" name="max_duration_s" id="max_duration_s" />
+          Max duration (s)
+          <input type="number" min="30" id="max_duration_s" />
         </label>
         <label>
-          Idle timeout (seconds)
-          <input type="number" min="5" name="idle_timeout_s" id="idle_timeout_s" />
+          Idle timeout (s)
+          <input type="number" min="5" id="idle_timeout_s" />
         </label>
         <label>
           Log level
-          <select name="log_level" id="log_level">
-            <option>debug</option>
-            <option>info</option>
-            <option>warning</option>
-            <option>error</option>
+          <select id="log_level">
+            <option>debug</option><option>info</option><option>warning</option><option>error</option>
           </select>
         </label>
-        <label>
-          API key env var name
-          <input name="api_key_env" id="api_key_env" />
-          <span class="hint">Usually OPENAI_API_KEY — value is set in .env, not here.</span>
-        </label>
-        <label class="full">
-          Realtime WebSocket URL
-          <input name="realtime_url" id="realtime_url" />
-        </label>
+
+        <!-- OpenAI / Realtime -->
+        <div class="provider-panel full" id="panel-openai" style="grid-column:1/-1">
+          <div class="grid">
+            <label>API key env var<input id="api_key_env" /></label>
+            <label>Chat API base URL<input id="openai_chat_base_url" /></label>
+            <label class="full">Realtime WebSocket URL<input id="realtime_url" /></label>
+          </div>
+        </div>
+
+        <!-- ChatGPT OAuth -->
+        <div class="provider-panel full" id="panel-oauth" style="grid-column:1/-1">
+          <p class="hint">Sign in with your ChatGPT subscription (device code). Realtime duplex still works best with an API key; OAuth is ideal for chat/tools.</p>
+          <div id="oauth-status" class="pill off">OAuth: unknown</div>
+          <div class="row">
+            <button type="button" id="btn-oauth-login">Sign in with ChatGPT</button>
+            <button type="button" class="secondary" id="btn-oauth-logout">Sign out</button>
+          </div>
+          <label class="full" style="margin-top:10px">
+            Or paste access token
+            <div class="secret-box">
+              <input type="password" id="oauth_access_token" placeholder="eyJ… or access token" autocomplete="off" />
+              <button type="button" class="secondary" id="btn-oauth-manual">Save token</button>
+            </div>
+          </label>
+          <label class="full">Token file path<input id="chatgpt_token_path" /></label>
+        </div>
+
+        <!-- LiteLLM -->
+        <div class="provider-panel full" id="panel-litellm" style="grid-column:1/-1">
+          <div class="grid">
+            <label class="full">LiteLLM base URL<input id="litellm_base_url" placeholder="http://127.0.0.1:4000/v1" /></label>
+            <label>LiteLLM API key env<input id="litellm_api_key_env" /></label>
+            <label>Default LiteLLM model<input id="litellm_model" /></label>
+          </div>
+        </div>
+
+        <!-- Ollama -->
+        <div class="provider-panel full" id="panel-ollama" style="grid-column:1/-1">
+          <div class="grid">
+            <label class="full">Ollama OpenAI base URL<input id="ollama_base_url" placeholder="http://127.0.0.1:11434/v1" /></label>
+            <label class="full">Ollama native URL (for model list)<input id="ollama_native_base_url" placeholder="http://127.0.0.1:11434" /></label>
+            <label>Default Ollama model<input id="ollama_model" placeholder="llama3.2" /></label>
+          </div>
+        </div>
       </form>
+
       <div class="row">
         <button type="button" id="btn-save">Save config</button>
         <button type="button" class="secondary" id="btn-reload">Reload</button>
-        <button type="button" class="secondary" id="btn-test">Test session (mock)</button>
+        <button type="button" class="secondary" id="btn-probe">Probe provider</button>
+        <button type="button" class="secondary" id="btn-test-chat">Test chat</button>
+        <button type="button" class="secondary" id="btn-test-mock">Test mock session</button>
         <span class="status" id="status"></span>
       </div>
     </section>
 
     <section class="card">
-      <h2>API key for testing</h2>
-      <p class="hint">Writes to the project <code>.env</code> file only (gitignored). Does not print the key back.</p>
-      <div class="secret-box" style="margin-top:10px">
-        <input type="password" id="api_key_value" placeholder="sk-... paste OpenAI API key" autocomplete="off" />
+      <h2>Secrets (.env)</h2>
+      <div class="secret-box">
+        <select id="env_key_name">
+          <option>OPENAI_API_KEY</option>
+          <option>LITELLM_API_KEY</option>
+          <option>OLLAMA_API_KEY</option>
+          <option>PICOVOICE_ACCESS_KEY</option>
+        </select>
+        <input type="password" id="env_key_value" placeholder="paste secret" autocomplete="off" />
         <button type="button" id="btn-save-key">Save to .env</button>
-        <button type="button" class="danger" id="btn-clear-key">Clear field</button>
       </div>
       <p class="hint" id="env-path-hint" style="margin-top:10px"></p>
     </section>
 
     <section class="card">
-      <h2>Quick actions</h2>
-      <div class="row">
-        <button type="button" class="secondary" id="btn-doctor">Run doctor</button>
-        <button type="button" class="secondary" id="btn-open-config">Show config path</button>
-      </div>
-      <pre id="action-out" style="margin:12px 0 0; white-space:pre-wrap; color:var(--muted); font-size:0.8rem;"></pre>
+      <h2>Output</h2>
+      <pre id="action-out"></pre>
     </section>
   </main>
   <script>
     const $ = (id) => document.getElementById(id);
     const statusEl = $("status");
+    let catalog = [];
 
     function setStatus(msg, ok) {
       statusEl.textContent = msg || "";
@@ -300,41 +260,77 @@
       return data;
     }
 
+    function showPanel(provider) {
+      for (const id of ["panel-openai", "panel-oauth", "panel-litellm", "panel-ollama"]) {
+        $(id).classList.remove("active");
+      }
+      if (provider === "realtime" || provider === "openai_api") $("panel-openai").classList.add("active");
+      if (provider === "chatgpt_oauth") $("panel-oauth").classList.add("active");
+      if (provider === "litellm") $("panel-litellm").classList.add("active");
+      if (provider === "ollama") $("panel-ollama").classList.add("active");
+      document.querySelectorAll(".catalog-item").forEach((el) => {
+        el.classList.toggle("active", el.dataset.id === provider);
+      });
+    }
+
+    function fillModels(models) {
+      const dl = $("model-list");
+      dl.innerHTML = "";
+      (models || []).forEach((m) => {
+        const o = document.createElement("option");
+        o.value = m;
+        dl.appendChild(o);
+      });
+    }
+
     function fillForm(s) {
       $("profile").value = s.profile || "mvp";
       $("provider").value = s.provider || "realtime";
-      const known = ["gpt-realtime-2.1-mini", "gpt-realtime-2.1", "gpt-realtime-2"];
-      if (known.includes(s.model)) {
-        $("model").value = s.model;
-        $("model_custom").value = "";
-      } else {
-        $("model").value = "gpt-realtime-2.1-mini";
-        $("model_custom").value = s.model || "";
-      }
+      $("model").value = s.model || "";
       $("voice").value = s.voice || "alloy";
       $("reasoning_effort").value = s.reasoning_effort || "minimal";
+      $("temperature").value = s.temperature ?? 0.4;
+      $("max_tokens").value = s.max_tokens ?? 2048;
       $("max_session_cost_usd").value = s.max_session_cost_usd ?? 2;
       $("max_duration_s").value = s.max_duration_s ?? 900;
       $("idle_timeout_s").value = s.idle_timeout_s ?? 45;
       $("log_level").value = s.log_level || "info";
       $("api_key_env").value = s.api_key_env || "OPENAI_API_KEY";
       $("realtime_url").value = s.realtime_url || "";
+      $("openai_chat_base_url").value = s.openai_chat_base_url || "https://api.openai.com/v1";
+      $("litellm_base_url").value = s.litellm_base_url || "";
+      $("litellm_api_key_env").value = s.litellm_api_key_env || "LITELLM_API_KEY";
+      $("litellm_model").value = s.litellm_model || "";
+      $("ollama_base_url").value = s.ollama_base_url || "";
+      $("ollama_native_base_url").value = s.ollama_native_base_url || "";
+      $("ollama_model").value = s.ollama_model || "";
+      $("chatgpt_token_path").value = s.chatgpt_token_path || "";
+      showPanel($("provider").value);
     }
 
     function formPayload() {
-      const custom = $("model_custom").value.trim();
       return {
         profile: $("profile").value,
         provider: $("provider").value,
-        model: custom || $("model").value,
+        model: $("model").value.trim(),
         voice: $("voice").value,
         reasoning_effort: $("reasoning_effort").value,
+        temperature: Number($("temperature").value),
+        max_tokens: Number($("max_tokens").value),
         max_session_cost_usd: Number($("max_session_cost_usd").value),
         max_duration_s: Number($("max_duration_s").value),
         idle_timeout_s: Number($("idle_timeout_s").value),
         log_level: $("log_level").value,
         api_key_env: $("api_key_env").value.trim() || "OPENAI_API_KEY",
         realtime_url: $("realtime_url").value.trim(),
+        openai_chat_base_url: $("openai_chat_base_url").value.trim(),
+        litellm_base_url: $("litellm_base_url").value.trim(),
+        litellm_api_key_env: $("litellm_api_key_env").value.trim(),
+        litellm_model: $("litellm_model").value.trim(),
+        ollama_base_url: $("ollama_base_url").value.trim(),
+        ollama_native_base_url: $("ollama_native_base_url").value.trim(),
+        ollama_model: $("ollama_model").value.trim(),
+        chatgpt_token_path: $("chatgpt_token_path").value.trim(),
       };
     }
 
@@ -347,7 +343,37 @@
         span.textContent = k + (v.set ? " · set · " + (v.masked || "****") : " · missing");
         box.appendChild(span);
       }
-      $("env-path-hint").textContent = "Project .env path: " + (paths && paths.project_env || "(unknown)");
+      $("env-path-hint").textContent = "Project .env: " + (paths && paths.project_env || "");
+    }
+
+    function renderOAuth(oauth) {
+      const el = $("oauth-status");
+      if (oauth && oauth.signed_in) {
+        el.className = "pill on";
+        el.textContent = "OAuth: signed in as " + (oauth.email || "account");
+      } else {
+        el.className = "pill off";
+        el.textContent = "OAuth: not signed in";
+      }
+    }
+
+    function renderCatalog(items) {
+      catalog = items || [];
+      const box = $("catalog");
+      box.innerHTML = "";
+      catalog.forEach((c) => {
+        const div = document.createElement("div");
+        div.className = "catalog-item";
+        div.dataset.id = c.id;
+        div.innerHTML = `<strong>${c.name}</strong><span>${c.description}</span>`;
+        div.onclick = () => {
+          $("provider").value = c.id;
+          showPanel(c.id);
+          if (c.models && c.models.length) fillModels(c.models);
+          if (c.models && c.models[0] && !$("model").value) $("model").value = c.models[0];
+        };
+        box.appendChild(div);
+      });
     }
 
     async function reload() {
@@ -355,66 +381,106 @@
       const data = await api("/api/settings");
       fillForm(data.settings);
       renderEnv(data.env, data.paths);
+      renderCatalog(data.catalog);
+      renderOAuth(data.oauth);
+      showPanel(data.settings.provider);
       setStatus("Loaded", true);
     }
+
+    $("provider").onchange = () => showPanel($("provider").value);
 
     $("btn-reload").onclick = () => reload().catch((e) => setStatus(e.message, false));
     $("btn-save").onclick = async () => {
       try {
         setStatus("Saving…");
-        const data = await api("/api/settings", {
-          method: "POST",
-          body: JSON.stringify(formPayload()),
-        });
+        const data = await api("/api/settings", { method: "POST", body: JSON.stringify(formPayload()) });
         fillForm(data.settings);
         renderEnv(data.env, data.paths);
+        renderOAuth(data.oauth);
         setStatus("Saved to " + data.config_path, true);
+      } catch (e) { setStatus(e.message, false); }
+    };
+    $("btn-probe").onclick = async () => {
+      try {
+        setStatus("Probing…");
+        const p = $("provider").value;
+        const data = await api("/api/probe?provider=" + encodeURIComponent(p));
+        fillModels(data.models || []);
+        $("action-out").textContent = JSON.stringify(data, null, 2);
+        setStatus(data.ok ? "Probe OK" : "Probe failed", !!data.ok);
+      } catch (e) { setStatus(e.message, false); }
+    };
+    $("btn-test-chat").onclick = async () => {
+      try {
+        setStatus("Testing chat…");
+        const data = await api("/api/test-chat", {
+          method: "POST",
+          body: JSON.stringify({ provider: $("provider").value, prompt: "Reply with exactly: aegis-ok" }),
+        });
+        $("action-out").textContent = JSON.stringify(data, null, 2);
+        setStatus(data.ok ? "Chat OK" : "Chat failed", !!data.ok);
       } catch (e) {
+        $("action-out").textContent = e.message;
         setStatus(e.message, false);
       }
+    };
+    $("btn-test-mock").onclick = async () => {
+      try {
+        setStatus("Mock session…");
+        const data = await api("/api/test-mock", { method: "POST", body: "{}" });
+        $("action-out").textContent = data.output || "";
+        setStatus(data.ok ? "Mock OK" : "Mock failed", !!data.ok);
+      } catch (e) { setStatus(e.message, false); }
     };
     $("btn-save-key").onclick = async () => {
       try {
-        const key = $("api_key_value").value.trim();
-        if (!key) { setStatus("Paste a key first", false); return; }
-        setStatus("Writing .env…");
+        const key = $("env_key_name").value;
+        const value = $("env_key_value").value.trim();
+        if (!value) { setStatus("Paste a secret first", false); return; }
         const data = await api("/api/env-key", {
           method: "POST",
-          body: JSON.stringify({
-            key: $("api_key_env").value.trim() || "OPENAI_API_KEY",
-            value: key,
-          }),
+          body: JSON.stringify({ key, value }),
         });
-        $("api_key_value").value = "";
+        $("env_key_value").value = "";
         renderEnv(data.env, data.paths);
-        setStatus("Key saved to " + data.env_path, true);
-      } catch (e) {
-        setStatus(e.message, false);
-      }
+        setStatus("Saved " + key + " to " + data.env_path, true);
+      } catch (e) { setStatus(e.message, false); }
     };
-    $("btn-clear-key").onclick = () => { $("api_key_value").value = ""; };
-    $("btn-test").onclick = async () => {
+    $("btn-oauth-login").onclick = async () => {
       try {
-        setStatus("Running mock session…");
-        const data = await api("/api/test-mock", { method: "POST", body: "{}" });
-        $("action-out").textContent = data.output || JSON.stringify(data, null, 2);
-        setStatus(data.ok ? "Mock session OK" : "Mock session failed", data.ok);
+        setStatus("Starting ChatGPT device login (browser)…");
+        $("action-out").textContent = "Complete login in the browser, then wait for polling…";
+        const data = await api("/api/oauth/login", {
+          method: "POST",
+          body: JSON.stringify({ open_browser: true }),
+        });
+        renderOAuth(data.status);
+        $("action-out").textContent = JSON.stringify(data, null, 2);
+        setStatus("Signed in", true);
       } catch (e) {
+        $("action-out").textContent = e.message + "\n\nTip: paste an access token manually below if device auth endpoints changed.";
         setStatus(e.message, false);
       }
     };
-    $("btn-doctor").onclick = async () => {
+    $("btn-oauth-logout").onclick = async () => {
       try {
-        const data = await api("/api/doctor");
-        $("action-out").textContent = data.output || "";
-        setStatus("Doctor finished", true);
-      } catch (e) {
-        setStatus(e.message, false);
-      }
+        const data = await api("/api/oauth/logout", { method: "POST", body: "{}" });
+        renderOAuth(data.status);
+        setStatus("Signed out", true);
+      } catch (e) { setStatus(e.message, false); }
     };
-    $("btn-open-config").onclick = async () => {
-      const data = await api("/api/settings");
-      $("action-out").textContent = JSON.stringify(data.paths, null, 2);
+    $("btn-oauth-manual").onclick = async () => {
+      try {
+        const token = $("oauth_access_token").value.trim();
+        if (!token) { setStatus("Paste a token", false); return; }
+        const data = await api("/api/oauth/manual", {
+          method: "POST",
+          body: JSON.stringify({ access_token: token }),
+        });
+        $("oauth_access_token").value = "";
+        renderOAuth(data.status);
+        setStatus("Token saved", true);
+      } catch (e) { setStatus(e.message, false); }
     };
 
     reload().catch((e) => setStatus(e.message, false));
