@@ -55,7 +55,8 @@ async def handle_read_file(
     path = arguments.get("path")
     if not isinstance(path, str) or not path:
         return ToolResult(output=err_json("invalid_path"), is_error=True)
-    max_bytes = int(arguments.get("max_bytes") or min(tools.max_output_bytes, 50_000))
+    requested = int(arguments.get("max_bytes") or min(tools.max_output_bytes, 50_000))
+    max_bytes = max(1, min(requested, tools.max_output_bytes))
 
     policy = evaluate_read_file(path, tools)
     if (gated := gate(policy, arguments=arguments, approved=approved)) is not None:
@@ -66,10 +67,14 @@ async def handle_read_file(
         return ToolResult(output=err_json("not_a_file", path=path), is_error=True)
 
     try:
-        data = target.read_bytes()[:max_bytes]
+        marker = "\n…[truncated]"
+        file_size = target.stat().st_size
+        read_limit = max_bytes if file_size <= max_bytes else max_bytes - len(marker.encode())
+        with target.open("rb") as stream:
+            data = stream.read(max(0, read_limit))
         text = data.decode("utf-8", errors="replace")
-        if target.stat().st_size > max_bytes:
-            text += "\n…[truncated]"
+        if file_size > max_bytes:
+            text += marker
     except OSError as exc:
         return ToolResult(output=err_json("read_failed", detail=str(exc)), is_error=True)
 

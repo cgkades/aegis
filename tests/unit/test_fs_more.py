@@ -41,6 +41,22 @@ async def test_read_invalid_path(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_read_file_clamps_model_requested_size_to_output_limit(tmp_path: Path) -> None:
+    target = tmp_path / "large.txt"
+    target.write_text("x" * 10_000, encoding="utf-8")
+    tools = ToolsConfig(
+        working_directory=str(tmp_path), sandbox_to_workdir=True, max_output_bytes=1024
+    )
+
+    result = await handle_read_file(
+        {"path": str(target), "max_bytes": 1_000_000}, tools=tools
+    )
+
+    assert not result.is_error
+    assert len(result.output.encode("utf-8")) <= 1_024 + len("\n…[truncated]")
+
+
+@pytest.mark.asyncio
 async def test_search_invalid(tmp_path: Path) -> None:
     tools = ToolsConfig(working_directory=str(tmp_path), sandbox_to_workdir=True)
     r = await handle_search_files({"pattern": 1}, tools=tools)  # type: ignore[arg-type]

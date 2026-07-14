@@ -108,6 +108,24 @@ async def test_realtime_requires_api_key() -> None:
         await session.connect(SessionConfig())
 
 
+@pytest.mark.asyncio
+async def test_realtime_connect_cancellation_closes_gateway() -> None:
+    gateway = CloudAudioGateway()
+    session = RealtimeVoiceSession(api_key="sk-test", gateway=gateway)
+
+    async def slow_connect(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    with patch("aegis.voice.realtime.websockets.connect", side_effect=slow_connect):
+        task = asyncio.create_task(session.connect(SessionConfig()))
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert not gateway.is_open
+
+
 def test_usage_from_response_flat() -> None:
     msg = {
         "type": "response.done",

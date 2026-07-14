@@ -2,8 +2,8 @@
 
 A reusable prompt for running a thorough, multi-perspective code review with
 parallel subagents, a running findings log, and a fix-and-verify loop. Paste the
-**Orchestrator prompt** below into Claude Code (or hand it to any agent runner
-that can spawn subagents). Adjust the scope line and model choices as needed.
+**Orchestrator prompt** below into Codex (or hand it to any agent runner that
+can spawn subagents). Adjust the scope line and model choices as needed.
 
 ---
 
@@ -23,20 +23,23 @@ Assign the strongest model to the tasks where a subtle miss is most expensive
 (security, cross-module correctness, the fix loop) and cheaper models to
 mechanical or single-lens passes.
 
-| Agent | Model | Why |
-|-------|-------|-----|
-| Orchestrator / fixer | **opus** | Holds the whole picture, sequences fixes, resolves conflicts, writes tests. |
-| Security + prompt-injection | **opus** | Highest stakes; needs adversarial, multi-step reasoning and threat modeling. |
-| Software engineering / architecture / first-run correctness | **opus** | Cross-module contracts, race conditions, lifecycle — the costliest bugs. |
-| Efficiency / performance | **sonnet** | Focused single-lens pass; strong enough to reason about hot paths. |
-| Python (or language) idioms & correctness | **sonnet** | Well-scoped, pattern-based; Sonnet is reliable and cheaper. |
-| Code quality / dead code / duplication | **haiku** | Largely mechanical: grep-verify usage, spot copy-paste, stale comments. Escalate a specific file to Sonnet if a judgment call is needed. |
-| Test author (optional separate agent) | **sonnet** | Writes regression tests from the confirmed findings. |
-| Docs / comments accuracy (optional) | **haiku** | Cheap pass for stale/misleading comments and READMEs. |
+| Agent | GPT-5.6 model | Anthropic model | Why |
+|-------|---------------|-----------------|-----|
+| Orchestrator / fixer | **Sol** | **Opus** | Holds the whole picture, sequences fixes, resolves conflicts, writes tests. |
+| Security + prompt-injection | **Sol** | **Opus** | Highest stakes; needs adversarial, multi-step reasoning and threat modeling. |
+| Software engineering / architecture / first-run correctness | **Sol** | **Opus** | Cross-module contracts, race conditions, lifecycle — the costliest bugs. |
+| Efficiency / performance | **Terra** | **Sonnet** | Focused single-lens pass; strong enough to reason about hot paths. |
+| Python (or language) idioms & correctness | **Terra** | **Sonnet** | Well-scoped, pattern-based; Terra/Sonnet are reliable and cheaper. |
+| Code quality / dead code / duplication | **Luna** | **Haiku** | Largely mechanical: grep-verify usage, spot copy-paste, stale comments. Escalate a specific file to Terra/Sonnet if a judgment call is needed. |
+| Test author (optional separate agent) | **Terra** | **Sonnet** | Writes regression tests from the confirmed findings. |
+| Docs / comments accuracy (optional) | **Luna** | **Haiku** | Cheap pass for stale/misleading comments and READMEs. |
+
+Use the column for the available model family; GPT-5.6 Sol/Terra/Luna map to
+Anthropic Opus/Sonnet/Haiku respectively.
 
 Rules of thumb:
-- **Never** run the security or architecture pass on Haiku.
-- If budget is tight, collapse Python + code-quality into one Sonnet agent.
+- **Never** run the security or architecture pass on GPT-5.6 Luna or Haiku.
+- If budget is tight, collapse Python + code-quality into one GPT-5.6 Terra or Sonnet agent.
 - If the codebase is large (>50k LOC), split each reviewer by subsystem and run
   more agents rather than one agent over everything.
 
@@ -95,7 +98,7 @@ Rules of thumb:
 > Skip pure style nits the linter already enforces. Verify dead-code / unused
 > claims with a grep across the repo before reporting."
 >
-> **1. Security & prompt-injection — model: opus**
+> **1. Security & prompt-injection — model: GPT-5.6 Sol / Opus**
 > Defensive review of the author's own code. Focus on: secret exposure (keys /
 > tokens logged, written to audit/telemetry, put in error messages, sent to the
 > wrong endpoint, world-readable, or visible in `ps`/`/proc`); local attack
@@ -108,7 +111,7 @@ Rules of thumb:
 > triggering auto-approved dangerous actions? Recommend concrete defenses.
 > Give each finding an attack scenario.
 >
-> **2. Software engineering / architecture / first-run correctness — model: opus**
+> **2. Software engineering / architecture / first-run correctness — model: GPT-5.6 Sol / Opus**
 > Trace the real startup path end to end. Find: race conditions, deadlocks,
 > resource leaks, state-machine holes, incorrect error propagation, lifecycle /
 > shutdown / signal-handling bugs, leaky or inconsistent abstractions, and
@@ -118,7 +121,7 @@ Rules of thumb:
 > socket, wrong wire payload, unresolvable dependency). Flag features that are
 > configured/advertised but never wired into the runtime path.
 >
-> **3. Efficiency / performance — model: sonnet**
+> **3. Efficiency / performance — model: GPT-5.6 Terra / Sonnet**
 > Prioritize hot paths and any always-on / per-frame / per-request loop. Find:
 > per-iteration allocations or copies, busy-wait/polling with short sleeps,
 > blocking I/O on an event loop, unbounded queues/caches/history (memory growth
@@ -127,7 +130,7 @@ Rules of thumb:
 > (frequency × cost) and give a concrete cheaper approach. Ignore micro-opts on
 > cold paths unless egregious.
 >
-> **4. Language idioms & correctness (e.g. Python) — model: sonnet**
+> **4. Language idioms & correctness (e.g. Python) — model: GPT-5.6 Terra / Sonnet**
 > Review for idiomatic usage and correctness the linter won't catch: async
 > pitfalls (blocking calls in async, un-awaited tasks, cancellation swallowing),
 > exception anti-patterns (bare/over-broad except, exceptions built into invalid
@@ -135,7 +138,7 @@ Rules of thumb:
 > public APIs, mutable defaults, module-level side effects, and reinventing stdlib
 > or ecosystem tooling. Flag `assert` used for runtime invariants.
 >
-> **5. Code quality / dead code / duplication — model: haiku**
+> **5. Code quality / dead code / duplication — model: GPT-5.6 Luna / Haiku**
 > Find, grep-verifying every claim across src + tests + entry points: unused
 > functions/classes/constants, unreachable branches, modules nothing imports,
 > config options nothing reads, half-wired features, copy-paste duplication,
@@ -145,9 +148,9 @@ Rules of thumb:
 > orchestrator rather than guessing.
 >
 > ### Optional additional reviewers
-> - **Docs & comments accuracy — haiku**: comments that lie vs. the code, stale
+> - **Docs & comments accuracy — GPT-5.6 Luna / Haiku**: comments that lie vs. the code, stale
 >   READMEs, wrong examples.
-> - **Tests & coverage — sonnet**: weak/missing coverage on critical paths,
+> - **Tests & coverage — GPT-5.6 Terra / Sonnet**: weak/missing coverage on critical paths,
 >   flaky patterns, tests that assert nothing, over-mocking that hides real bugs.
 > - For large repos, duplicate reviewers 2 and 5 per subsystem.
 >

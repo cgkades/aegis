@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from aegis.approval import (
     ApprovalRequest,
     prompt_cli_approval,
@@ -11,7 +13,7 @@ from aegis.config.schema import AegisConfig
 from aegis.session.events import Trigger
 from aegis.session.machine import SessionMachine
 from aegis.tools.registry import ToolRegistry
-from aegis.tools.sanitize import wrap_untrusted
+from aegis.tools.sanitize import strip_control_sequences, wrap_untrusted
 from aegis.tools.types import ToolResult
 from aegis.util.logging import get_logger
 from aegis.voice.protocol import ToolCallRequest, VoiceSession
@@ -47,7 +49,7 @@ async def handle_tool_call(
             resp = await prompt_cli_approval(
                 ApprovalRequest(
                     tool_name=call.name,
-                    summary=str(call.arguments)[:300],
+                    summary=_approval_summary(call.arguments),
                     risk=result.risk or "unknown",
                     call_id=call.call_id,
                 ),
@@ -62,8 +64,12 @@ async def handle_tool_call(
             result = result_from_denial(resp.reason or "denied")
             machine.trigger(Trigger.APPROVAL_DENY, tool=call.name)
         else:
-            if resp.grant_scope == "same_tool":
-                registry.grant_session(call.name)
+            if (
+                resp.grant_scope == "same_tool"
+                and cfg.tools.approval.session_grant_applies_to.value == "same_tool"
+                and result.risk == "read"
+            ):
+                registry.grant_session(call.name, call.arguments)
             result = await registry.dispatch(
                 call.name,
                 call.arguments,
@@ -72,18 +78,21 @@ async def handle_tool_call(
             )
             machine.trigger(Trigger.APPROVAL_ALLOW, tool=call.name)
 
-    # Wrap the result in untrusted-content delimiters and strip control/ANSI
-    # escapes before it goes back to the model — tool output (shell stdout, file
-    # contents, MCP responses) is attacker-influenced and may carry injected
-    # instructions. Error payloads we construct ourselves are already trusted JSON,
-    # so only data outputs are wrapped.
+    # Wrap every result in untrusted-content delimiters and strip control/ANSI
+    # escapes before it goes back to the model. Error outputs can contain stderr,
+    # server responses, and filesystem-controlled text just as successful ones can.
     max_bytes = cfg.tools.max_output_bytes
-    wire_output = result.output if result.is_error else wrap_untrusted(
-        result.output, max_bytes=max_bytes
-    )
+    wire_output = wrap_untrusted(result.output, max_bytes=max_bytes)
     await session.send_tool_result(
         call.call_id,
         wire_output,
         is_error=result.is_error,
     )
     return result
+
+
+def _approval_summary(arguments: dict[str, object]) -> str:
+    """Render bounded, terminal-safe model arguments for the human approver."""
+    return strip_control_sequences(
+        json.dumps(arguments, ensure_ascii=False, default=str, sort_keys=True)
+    )[:300]

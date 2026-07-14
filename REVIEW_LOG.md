@@ -212,3 +212,41 @@ missing-token / bad-Host, and to check keys land in secrets.env.
 ## Fixes applied
 
 (pending)
+
+## Round 2 — GPT-5.6 review (2026-07-13)
+
+Baseline: `uv run pytest` passed (288 tests, 81.39% coverage) and Ruff was
+clean. The baseline had an un-awaited-coroutine warning from the CLI/daemon
+test; it was a masked test failure, not an application warning.
+
+### Confirmed findings fixed
+
+| ID | Severity | Location | Resolution |
+| --- | --- | --- | --- |
+| R2-S1 | Critical | `tools/oncall/kubectl_tools.py` | Replaced unrestricted kubectl extras with a small safe flag language; target/context/server overrides are denied and an allowlisted namespace is required. |
+| R2-S2 | Critical | `session/tool_loop.py`, `tools/registry.py` | Session approval grants now apply only to an exact read-only argument fingerprint; secrets, writes, exec, network, and distinct paths require another approval. |
+| R2-S3 | High | `mcp/stdio_client.py`, `mcp/bridge.py` | Local MCP processes use a scrubbed environment, stderr cannot deadlock the process, secret env values resolve only from `env:VARIABLE`, and failed startup is closed. |
+| R2-S4 | High | `session/tool_loop.py`, `llm/chat_session.py` | All tool results—including errors—are sanitized and delimited before returning to a model; approval text is terminal-safe; text-chat system instructions carry the same untrusted-output rule. |
+| R2-S5 | High | `config/*`, `mcp/remote_spec.py` | Remote MCP headers/authorization and secret-like local MCP env settings reject literals, resolve `env:VARIABLE` from environment or `secrets.env`, and config display redacts those fields. |
+| R2-S6 | High | `tools/builtin/write_tools.py` | `apply_patch` now denies secrets paths even with approval. |
+| R2-S7 | High | `tools/builtin/process_tools.py`, `util/secrets.py` | Process command lines receive token/credential redaction; file and log tools use bounded reads. |
+| R2-C1 | High | `session/runner.py`, `voice/realtime.py` | Connection timeout, realtime cancellation cleanup, uplink-failure-safe teardown, idle timeout, and no-audio realtime preflight are enforced. |
+| R2-C2 | High | `session/runner.py`, `README.md` | Text-only providers now fail fast from the voice-session CLI instead of opening an unusable session; documentation no longer advertises those commands as voice-capable. |
+| R2-C3 | High | `wake/openwakeword.py` | The advertised `hey_aegis` phrase now requires an explicit custom wake model rather than silently loading `hey_jarvis`. |
+| R2-M1 | Medium | `config/load.py` | `[llm.openai]` settings are no longer overwritten by default legacy `[openai]` values. |
+| R2-T1 | Medium | `test_cli_status_daemon.py` | The live-daemon CLI test runs Click in a worker thread and asserts the real socket path, eliminating the un-awaited coroutine warning and fallback that hid failure. |
+
+### Deferred
+
+- Global hotkey configuration is still not wired into the daemon lifecycle; the
+  supported activation path remains the IPC command or a desktop-environment
+  keybinding.
+- A real custom “Hey Aegis” openWakeWord model and cascaded STT/TTS remain
+  product work; this review makes both unavailable paths explicit and safe.
+
+### Verification
+
+- `uv run pytest`: 306 passed, coverage 81.41% (gate: 80%).
+- `uv run ruff check src tests`: clean.
+- `uv run aegis session once --backend mock`: clean end-to-end session.
+- `uv run aegis doctor`: completed; idle-cloud invariant passed.

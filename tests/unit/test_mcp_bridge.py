@@ -9,13 +9,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from aegis.config import build_config
-from aegis.mcp.bridge import LocalMcpBridge, _format_mcp_result, _safe
+from aegis.mcp.bridge import LocalMcpBridge, _format_mcp_result, _resolve_server_env, _safe
 from aegis.mcp.stdio_client import McpStdioClient, McpToolInfo
 from aegis.tools.registry import ToolRegistry
 
 
 @pytest.mark.asyncio
-async def test_stdio_client_initialize_list_call() -> None:
+async def test_stdio_client_initialize_list_call(monkeypatch: pytest.MonkeyPatch) -> None:
     """Drive McpStdioClient with a scripted process pair of pipes."""
 
     class FakeProc:
@@ -95,8 +95,11 @@ async def test_stdio_client_initialize_list_call() -> None:
                 return b""
 
     fake = FakeProc()
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-mcp")
+    captured_env: dict[str, str] = {}
 
     async def fake_exec(*args, **kwargs):
+        captured_env.update(kwargs["env"])
         return fake
 
     client = McpStdioClient("fake-mcp", name="test")
@@ -106,6 +109,7 @@ async def test_stdio_client_initialize_list_call() -> None:
         result = await client.call_tool("echo", {"text": "hi"})
         assert result["content"][0]["text"] == "hi"
         await client.close()
+    assert "OPENAI_API_KEY" not in captured_env
 
 
 def test_format_mcp_result() -> None:
@@ -119,6 +123,14 @@ def test_format_mcp_result() -> None:
 
 def test_safe_name() -> None:
     assert _safe("my server!") == "my_server_"
+
+
+def test_resolve_server_env_keeps_static_values_and_expands_references(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MCP_TEST_TOKEN", "secret")
+    resolved = _resolve_server_env({"MODE": "test", "API_TOKEN": "env:MCP_TEST_TOKEN"})
+    assert resolved == {"MODE": "test", "API_TOKEN": "secret"}
 
 
 @pytest.mark.asyncio

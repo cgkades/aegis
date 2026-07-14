@@ -20,6 +20,10 @@ _REDACT_PATTERNS: list[re.Pattern[str]] = [
         r"(?i)(api[_-]?key|token|secret|password|passwd|authorization|"
         r"access[_-]?key|secret[_-]?key)\s*[=:]\s*\S+"
     ),
+    re.compile(
+        r"(?i)--?(?:api[_-]?key|token|secret|password|passwd|authorization|"
+        r"access[_-]?key|secret[_-]?key)(?:=|\s+)\S+"
+    ),
 ]
 
 

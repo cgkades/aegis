@@ -67,6 +67,53 @@ async def test_tool_loop_approval_allow(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_grant_never_auto_approves_another_secrets_path(tmp_path: Path) -> None:
+    first = tmp_path / ".env"
+    first.write_text("FIRST=1", encoding="utf-8")
+    second = tmp_path / ".ssh" / "id_ed25519"
+    second.parent.mkdir()
+    second.write_text("SECOND=2", encoding="utf-8")
+    cfg = build_config(
+        {
+            "tools": {
+                "working_directory": str(tmp_path),
+                "sandbox_to_workdir": True,
+                "enabled": ["fs"],
+            }
+        }
+    )
+    reg = build_registry(cfg)
+    machine = SessionMachine()
+    machine.trigger(Trigger.CLI_START)
+    machine.trigger(Trigger.CAPTURE_READY)
+    machine.trigger(Trigger.SESSION_READY)
+    session = MockVoiceSession(auto_end=False)
+    await session.connect(cfg.session)
+
+    with patch(
+        "aegis.session.tool_loop.prompt_cli_approval",
+        new=AsyncMock(return_value=ApprovalResponse(True, grant_scope="same_tool")),
+    ):
+        result = await handle_tool_call(
+            ToolCallRequest(
+                call_id="c-secret-1",
+                name="read_file",
+                arguments={"path": str(first)},
+            ),
+            session=session,
+            registry=reg,
+            machine=machine,
+            cfg=cfg,
+            interactive_approval=True,
+        )
+
+    assert not result.is_error
+    second_result = await reg.dispatch("read_file", {"path": str(second)})
+    assert second_result.is_error
+    assert second_result.decision == "prompt"
+
+
+@pytest.mark.asyncio
 async def test_tool_loop_approval_deny(tmp_path: Path) -> None:
     env = tmp_path / ".env"
     env.write_text("SECRET=1", encoding="utf-8")

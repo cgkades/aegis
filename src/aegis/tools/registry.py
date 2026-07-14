@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from aegis.audit import AuditLogger
@@ -46,7 +47,11 @@ class ToolRegistry:
         self._specs: dict[str, ToolSpec] = {}
         self._session_calls = 0
         self._turn_calls = 0
-        self._session_grants: set[str] = set()  # tool names granted for session
+        # A session grant is intentionally scoped to the exact approved request,
+        # never merely to a tool name. A broad tool-name grant would let a later,
+        # prompt-injected invocation swap a safe path or command for a secret or
+        # destructive one.
+        self._session_grants: dict[str, set[str]] = {}
 
     def register(self, spec: ToolSpec) -> None:
         self._specs[spec.name] = spec
@@ -73,8 +78,10 @@ class ToolRegistry:
     def reset_turn(self) -> None:
         self._turn_calls = 0
 
-    def grant_session(self, tool_name: str) -> None:
-        self._session_grants.add(tool_name)
+    def grant_session(self, tool_name: str, arguments: dict[str, Any]) -> None:
+        fingerprint = _arguments_fingerprint(arguments)
+        if fingerprint is not None:
+            self._session_grants.setdefault(tool_name, set()).add(fingerprint)
 
     async def dispatch(
         self,
@@ -125,7 +132,7 @@ class ToolRegistry:
             result = await spec.handler(
                 arguments,
                 tools=self.tools_config,
-                approved=approved or name in self._session_grants,
+                approved=approved or self._is_session_granted(name, arguments),
                 spec=spec,
             )
         except Exception as exc:
@@ -151,3 +158,14 @@ class ToolRegistry:
                 error="error" if result.is_error else None,
             )
         return result
+
+    def _is_session_granted(self, tool_name: str, arguments: dict[str, Any]) -> bool:
+        fingerprint = _arguments_fingerprint(arguments)
+        return fingerprint is not None and fingerprint in self._session_grants.get(tool_name, set())
+
+
+def _arguments_fingerprint(arguments: dict[str, Any]) -> str | None:
+    try:
+        return json.dumps(arguments, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return None

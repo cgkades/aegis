@@ -6,11 +6,13 @@ import json
 from typing import Any
 
 from aegis.audit import AuditLogger
+from aegis.config.paths import default_paths
 from aegis.config.schema import AegisConfig, McpLocalServer
 from aegis.mcp.stdio_client import McpStdioClient
 from aegis.tools.registry import ToolRegistry
 from aegis.tools.types import ToolResult, ToolSpec
 from aegis.util.logging import get_logger
+from aegis.util.secrets import resolve_api_key
 
 log = get_logger("mcp.bridge")
 
@@ -43,10 +45,15 @@ class LocalMcpBridge:
         self._clients.clear()
 
     async def _start_server(self, server: McpLocalServer) -> list[str]:
+        try:
+            env = _resolve_server_env(server.env)
+        except RuntimeError as exc:
+            log.error("failed to configure MCP server %s: %s", server.name, exc)
+            return []
         client = McpStdioClient(
             server.command,
             server.args,
-            env=server.env or None,
+            env=env or None,
             cwd=server.cwd,
             name=server.name,
         )
@@ -54,6 +61,7 @@ class LocalMcpBridge:
             await client.start()
         except Exception as exc:
             log.error("failed to start MCP server %s: %s", server.name, exc)
+            await client.close()
             return []
 
         self._clients.append(client)
@@ -141,3 +149,20 @@ def _format_mcp_result(result: Any) -> str:
 
 def _safe(name: str) -> str:
     return "".join(c if c.isalnum() or c in "_-" else "_" for c in name)[:48]
+
+
+def _resolve_server_env(configured: dict[str, str]) -> dict[str, str]:
+    """Expand explicit env:VAR references without inheriting ambient secrets."""
+    resolved: dict[str, str] = {}
+    for key, value in configured.items():
+        if value.startswith("env:"):
+            secret = resolve_api_key(
+                env_var=value.removeprefix("env:"),
+                secrets_file=default_paths().secrets_env,
+            )
+            if not secret:
+                raise RuntimeError(f"secret reference {value!r} is not set")
+            resolved[key] = secret
+        else:
+            resolved[key] = value
+    return resolved

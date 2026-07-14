@@ -91,6 +91,13 @@ def _expand_user_path(value: str | Path) -> str:
     return str(Path(str(value)).expanduser())
 
 
+def _validate_env_reference(value: str, field_name: str) -> None:
+    """Require secret-bearing MCP settings to resolve from env/secrets.env."""
+    variable = value.removeprefix("env:")
+    if not value.startswith("env:") or not variable.isidentifier():
+        raise ValueError(f"{field_name} must be an env:VARIABLE reference")
+
+
 class AppConfig(BaseModel):
     name: str = "Aegis"
     data_dir: str = "~/.local/share/aegis"
@@ -395,6 +402,15 @@ class McpLocalServer(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     cwd: str | None = None
 
+    @field_validator("env")
+    @classmethod
+    def require_secret_env_references(cls, value: dict[str, str]) -> dict[str, str]:
+        for key, setting in value.items():
+            lowered = key.lower()
+            if any(term in lowered for term in ("key", "token", "secret", "password", "auth")):
+                _validate_env_reference(setting, f"mcp.local.env[{key!r}]")
+        return value
+
 
 class McpLocalConfig(BaseModel):
     servers: list[McpLocalServer] = Field(default_factory=list)
@@ -409,6 +425,20 @@ class McpRemoteServer(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     authorization: str | None = None
 
+    @field_validator("headers")
+    @classmethod
+    def require_header_env_references(cls, value: dict[str, str]) -> dict[str, str]:
+        for header, reference in value.items():
+            _validate_env_reference(reference, f"mcp.remote.headers[{header!r}]")
+        return value
+
+    @field_validator("authorization")
+    @classmethod
+    def require_authorization_env_reference(cls, value: str | None) -> str | None:
+        if value is not None:
+            _validate_env_reference(value, "mcp.remote.authorization")
+        return value
+
 
 class McpRemoteConfig(BaseModel):
     servers: list[McpRemoteServer] = Field(default_factory=list)
@@ -420,6 +450,13 @@ class McpConnector(BaseModel):
     require_approval: McpApproval = McpApproval.ALWAYS
     allowed_tools: list[str] = Field(default_factory=list)
     authorization: str | None = None
+
+    @field_validator("authorization")
+    @classmethod
+    def require_authorization_env_reference(cls, value: str | None) -> str | None:
+        if value is not None:
+            _validate_env_reference(value, "mcp.connectors.authorization")
+        return value
 
 
 class McpConnectorsConfig(BaseModel):

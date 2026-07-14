@@ -8,6 +8,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from aegis.tools.policy import scrubbed_env
 from aegis.util.logging import get_logger
 
 log = get_logger("mcp.stdio")
@@ -48,9 +49,7 @@ class McpStdioClient:
         return list(self._tools)
 
     async def start(self) -> None:
-        import os
-
-        env = os.environ.copy()
+        env = scrubbed_env()
         if self.env:
             env.update(self.env)
         self._proc = await asyncio.create_subprocess_exec(
@@ -58,7 +57,7 @@ class McpStdioClient:
             *self.args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
             cwd=self.cwd,
             env=env,
         )

@@ -41,6 +41,20 @@ async def test_tail_log(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_tail_log_reads_only_bounded_suffix(tmp_path: Path) -> None:
+    f = tmp_path / "large.log"
+    f.write_text(("old\n" * 10_000) + "latest\n", encoding="utf-8")
+    tools = ToolsConfig(
+        working_directory=str(tmp_path), sandbox_to_workdir=True, max_output_bytes=1024
+    )
+
+    result = await handle_tail_log({"path": str(f), "lines": 1}, tools=tools)
+
+    assert not result.is_error
+    assert result.output == "latest"
+
+
+@pytest.mark.asyncio
 async def test_tail_log_missing(tmp_path: Path) -> None:
     tools = ToolsConfig(working_directory=str(tmp_path), sandbox_to_workdir=True)
     r = await handle_tail_log({"path": str(tmp_path / "nope.log")}, tools=tools)

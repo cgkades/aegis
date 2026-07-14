@@ -55,6 +55,12 @@ def build_config(
     # Order: empty base → profile defaults → user overrides (user wins)
     merged = deep_merge({}, profile_overlay(profile_name))
     merged = deep_merge(merged, user_dict)
+    # `[llm.openai]` is the current location. Mirror it into the legacy
+    # top-level block only when the caller did not explicitly choose the legacy
+    # form; the model validator then keeps both public access paths aligned.
+    llm_openai = (user_dict.get("llm") or {}).get("openai")
+    if isinstance(llm_openai, dict) and "openai" not in user_dict:
+        merged["openai"] = dict(llm_openai)
     # Ensure profile name stays consistent after merge
     merged.setdefault("profile", {})["name"] = profile_name.value
 
@@ -103,4 +109,30 @@ def format_validation_error(exc: ValidationError) -> str:
 
 
 def config_to_display_dict(cfg: AegisConfig) -> dict[str, Any]:
-    return cfg.model_dump(mode="json")
+    """Return display-safe config without persistent credential values."""
+    return _redact_config_secrets(cfg.model_dump(mode="json"))
+
+
+def _redact_config_secrets(value: Any) -> Any:
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, child in value.items():
+            lowered = key.lower()
+            if (
+                not lowered.endswith("_env")
+                and (
+                    lowered == "authorization"
+                    or "token" in lowered
+                    or "secret" in lowered
+                    or "password" in lowered
+                    or "api_key" in lowered
+                    or lowered == "headers"
+                )
+            ):
+                result[key] = "[REDACTED]"
+            else:
+                result[key] = _redact_config_secrets(child)
+        return result
+    if isinstance(value, list):
+        return [_redact_config_secrets(item) for item in value]
+    return value

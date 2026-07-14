@@ -53,7 +53,11 @@ class OpenWakeWordEngine:
                 raise FileNotFoundError(f"wake model not found: {path}")
             kwargs["wakeword_models"] = [str(path)]
         else:
-            # Built-in models; custom "hey_aegis" requires training (Phase 1).
+            if self.phrase not in self.model_names:
+                raise RuntimeError(
+                    f"wake.phrase={self.phrase!r} requires wake.custom_model_path; "
+                    f"available built-in models: {', '.join(self.model_names)}"
+                )
             kwargs["wakeword_models"] = self.model_names
 
         self._model = Model(**kwargs)
@@ -103,5 +107,5 @@ class OpenWakeWordEngine:
                     best_name = name
             if best_name is not None and best_score >= self.threshold:
                 self._cooldown_frames = 15  # debounce ~ few hundred ms
-                event = WakeEvent(phrase=best_name, score=best_score, engine=self.name)
+                event = WakeEvent(phrase=self.phrase, score=best_score, engine=self.name)
         return event

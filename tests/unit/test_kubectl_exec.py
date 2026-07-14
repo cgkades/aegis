@@ -62,6 +62,38 @@ async def test_kubectl_banned_flag() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("extra_args"),
+    [
+        ["--namespace=production"],
+        ["-n", "production"],
+        ["-A"],
+        ["--server=https://bad.example"],
+    ],
+)
+async def test_kubectl_rejects_extra_target_override(extra_args: list[str]) -> None:
+    tools = ToolsConfig(
+        kubectl=ToolsKubectlConfig(
+            enabled=True,
+            allowed_verbs=["get"],
+            allowed_namespaces=["staging"],
+        )
+    )
+    with patch("aegis.tools.oncall.kubectl_tools.shutil.which", return_value="/usr/bin/kubectl"):
+        result = await handle_kubectl(
+            {
+                "verb": "get",
+                "resource": "secrets",
+                "namespace": "staging",
+                "extra_args": extra_args,
+            },
+            tools=tools,
+        )
+    assert result.is_error
+    assert result.decision == "deny"
+
+
+@pytest.mark.asyncio
 async def test_kubectl_context_denied() -> None:
     tools = ToolsConfig(
         kubectl=ToolsKubectlConfig(
