@@ -1,0 +1,15 @@
+[Unit]
+Description=Aegis voice agent daemon
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/aegis daemon
+Restart=on-failure
+RestartSec=2
+Environment=PYTHONUNBUFFERED=1
+# Provide OPENAI_API_KEY via environment.d or secrets.env — do not hardcode here.
+
+[Install]
+WantedBy=default.target

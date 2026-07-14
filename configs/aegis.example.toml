@@ -1,0 +1,140 @@
+# Full example Aegis config (mirrors DESIGN.md schema sketch).
+# Copy to ~/.config/aegis/config.toml (or run: aegis config init)
+
+[app]
+name = "Aegis"
+data_dir = "~/.local/share/aegis"
+log_level = "info"
+
+# Profile expands into concrete defaults (tools packs, model, approval).
+# Explicit keys in this file always win over profile.
+[profile]
+name = "mvp"  # mvp | standard | oncall
+
+[audio]
+input_device = "default"
+output_device = "default"
+capture_rate_hz = 48000
+wake_sample_rate_hz = 16000
+session_sample_rate_hz = 24000
+channels = 1
+uplink_queue_ms = 500
+local_vad_enabled = true
+local_vad_hangover_ms = 300
+duck_on_playback = true
+
+[wake]
+enabled = true
+engine = "openwakeword"  # openwakeword | porcupine
+phrase = "hey_aegis"
+threshold = 0.5
+custom_model_path = ""
+confirm_speech_timeout_s = 1.5
+
+[activation]
+hotkey = "Super+Shift+Space"
+hotkey_backend = "auto"
+push_to_talk_mode = "toggle"
+chime_on_wake = true
+chime_on_end = false
+chime_on_connecting = true
+
+[session]
+provider = "realtime"  # realtime | gpt_live | text_fallback | hybrid_text_tools
+model = "gpt-realtime-2.1-mini"
+voice = "alloy"
+idle_timeout_s = 45
+max_duration_s = 900
+max_session_cost_usd = 2.00
+connect_timeout_s = 8
+reuse_grace_s = 0
+instructions_file = "~/.config/aegis/instructions.md"
+reasoning_effort = "minimal"
+
+[session.context]
+max_tool_result_chars_retained = 8000
+max_transcript_turns = 40
+strip_old_audio_items = true
+summarize_when_turns_exceed = 30
+keep_last_n_tool_results = 8
+
+[openai]
+api_key_env = "OPENAI_API_KEY"
+realtime_url = "wss://api.openai.com/v1/realtime"
+
+[tools]
+enabled = ["fs"]
+working_directory = "~"
+sandbox_to_workdir = true
+max_output_bytes = 100000
+default_timeout_s = 30
+max_tool_calls_per_turn = 8
+max_tool_calls_per_session = 64
+parallel_read_tools = true
+
+[tools.shell]
+enabled = false
+mode = "argv_policy"
+allowed_executable_dirs = ["/usr/bin", "/usr/local/bin", "/bin"]
+reserved_binaries = [
+  "kubectl", "oc", "helm", "docker", "podman", "nerdctl",
+  "sudo", "ssh", "doas", "pkexec", "su",
+]
+denylist_substrings = ["rm -rf /", "mkfs", "dd if="]
+
+[tools.secrets]
+decision = "prompt"
+path_globs = [
+  "**/.ssh/**",
+  "**/id_rsa*",
+  "**/id_ed25519*",
+  "**/.env",
+  "**/.env.*",
+  "**/*.pem",
+  "**/*.key",
+  "**/credentials.json",
+  "**/secrets.env",
+  "**/.aws/credentials",
+  "**/.kube/config",
+  "**/.gnupg/**",
+]
+
+[tools.approval]
+default = "auto_readonly"
+timeout_s = 60
+voice_confirm_phrase = true
+mute_uplink_during_approval = true
+session_grant_applies_to = "same_tool"
+
+[tools.git]
+enabled = false
+allow_commit = false
+allow_push = false
+deny_via_shell = true
+shell_readonly_rules = false
+
+[tools.kubectl]
+enabled = false
+allowed_namespaces = ["staging", "dev"]
+allowed_verbs = ["get", "describe", "logs", "top"]
+context_allowlist = []
+deny_via_shell = true
+env_allowlist = ["KUBECONFIG", "KUBECTL_CONTEXT", "KUBERNETES_MASTER"]
+
+[mcp.local]
+# servers = []  # use [[mcp.local.servers]] entries when needed
+
+[mcp.remote]
+# servers = []
+
+[mcp.connectors]
+# items = []
+
+[privacy]
+store_transcripts = true
+store_audio = false
+audio_debug_buffer = false
+redact_secrets_in_audit = true
+
+[observability]
+metrics_enabled = true

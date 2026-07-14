@@ -1,0 +1,99 @@
+"""Filesystem tool tests."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from aegis.config import build_config
+from aegis.config.schema import ToolsConfig
+from aegis.tools.builtin.fs_tools import handle_list_dir, handle_read_file, handle_search_files
+from aegis.tools.factory import build_registry
+
+
+@pytest.mark.asyncio
+async def test_list_and_read(tmp_path: Path) -> None:
+    f = tmp_path / "hello.txt"
+    f.write_text("hello aegis", encoding="utf-8")
+    tools = ToolsConfig(working_directory=str(tmp_path), sandbox_to_workdir=True)
+
+    listed = await handle_list_dir({"path": str(tmp_path)}, tools=tools)
+    assert not listed.is_error
+    assert "hello.txt" in listed.output
+
+    read = await handle_read_file({"path": str(f)}, tools=tools)
+    assert not read.is_error
+    assert "hello aegis" in read.output
+
+
+@pytest.mark.asyncio
+async def test_read_outside_sandbox_denied(tmp_path: Path) -> None:
+    tools = ToolsConfig(working_directory=str(tmp_path), sandbox_to_workdir=True)
+    result = await handle_read_file({"path": "/etc/passwd"}, tools=tools)
+    assert result.is_error
+    assert "sandbox" in result.output
+
+
+@pytest.mark.asyncio
+async def test_read_env_requires_approval(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("SECRET=1", encoding="utf-8")
+    tools = ToolsConfig(working_directory=str(tmp_path), sandbox_to_workdir=True)
+    result = await handle_read_file({"path": str(env)}, tools=tools, approved=False)
+    assert result.decision == "prompt"
+    assert result.meta.get("needs_approval")
+
+    allowed = await handle_read_file({"path": str(env)}, tools=tools, approved=True)
+    assert not allowed.is_error
+    assert "SECRET=1" in allowed.output
+
+
+@pytest.mark.asyncio
+async def test_search_files(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("x", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("y", encoding="utf-8")
+    tools = ToolsConfig(working_directory=str(tmp_path), sandbox_to_workdir=True)
+    result = await handle_search_files({"pattern": "*.py", "path": str(tmp_path)}, tools=tools)
+    assert not result.is_error
+    assert "a.py" in result.output
+
+
+def test_mvp_registry_has_fs_not_shell() -> None:
+    cfg = build_config({"profile": {"name": "mvp"}})
+    reg = build_registry(cfg)
+    names = reg.names()
+    assert "list_dir" in names
+    assert "read_file" in names
+    assert "run_command" not in names
+
+
+def test_shell_registry_when_enabled() -> None:
+    cfg = build_config(
+        {
+            "profile": {"name": "mvp"},
+            "tools": {
+                "enabled": ["fs", "shell"],
+                "shell": {"enabled": True},
+            },
+        }
+    )
+    # ensure default rules applied via factory
+    reg = build_registry(cfg)
+    assert "run_command" in reg.names()
+
+
+@pytest.mark.asyncio
+async def test_run_command_rejects_command_key() -> None:
+    cfg = build_config(
+        {
+            "tools": {
+                "enabled": ["fs", "shell"],
+                "shell": {"enabled": True},
+            }
+        }
+    )
+    reg = build_registry(cfg)
+    result = await reg.dispatch("run_command", {"command": "ls"})
+    assert result.is_error
+    assert "argv_only_schema" in result.output

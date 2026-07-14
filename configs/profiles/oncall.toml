@@ -1,0 +1,25 @@
+# Fragment documenting oncall profile defaults (applied in code via profiles.py).
+
+[profile]
+name = "oncall"
+
+[session]
+model = "gpt-realtime-2.1"
+max_session_cost_usd = 8.0
+reasoning_effort = "medium"
+max_duration_s = 1800
+
+[tools]
+enabled = ["fs", "git", "process", "kubectl"]
+
+[tools.shell]
+enabled = false
+
+[tools.git]
+enabled = true
+deny_via_shell = true
+
+[tools.kubectl]
+enabled = true
+deny_via_shell = true
+allowed_verbs = ["get", "describe", "logs", "top"]

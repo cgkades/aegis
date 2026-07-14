@@ -1,0 +1,22 @@
+# Fragment documenting mvp profile defaults (applied in code via profiles.py).
+# Not loaded at runtime by itself — reference only.
+
+[profile]
+name = "mvp"
+
+[session]
+model = "gpt-realtime-2.1-mini"
+max_session_cost_usd = 2.0
+reasoning_effort = "minimal"
+
+[tools]
+enabled = ["fs"]
+
+[tools.shell]
+enabled = false
+
+[tools.git]
+enabled = false
+
+[tools.kubectl]
+enabled = false

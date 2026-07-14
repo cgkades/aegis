@@ -1,0 +1,22 @@
+# Fragment documenting standard profile defaults (applied in code via profiles.py).
+
+[profile]
+name = "standard"
+
+[session]
+model = "gpt-realtime-2.1-mini"
+max_session_cost_usd = 3.0
+reasoning_effort = "low"
+
+[tools]
+enabled = ["fs", "git", "process"]
+
+[tools.shell]
+enabled = false
+
+[tools.git]
+enabled = true
+deny_via_shell = true
+
+[tools.kubectl]
+enabled = false

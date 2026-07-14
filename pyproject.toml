@@ -1,0 +1,92 @@
+[project]
+name = "aegis"
+version = "0.1.0"
+description = "Always-on personal voice AI agent for Linux — local wake word, OpenAI Realtime sessions, tools + MCP"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [{ name = "Aegis contributors" }]
+keywords = ["voice", "agent", "realtime", "openai", "wake-word", "mcp"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    "click>=8.1",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "numpy>=2.0",
+    "websockets>=14.0",
+]
+
+[project.optional-dependencies]
+audio = [
+    "sounddevice>=0.5",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=7.0",
+    "coverage>=7.0",
+    "ruff>=0.8",
+]
+all = [
+    "aegis[audio,dev]",
+]
+
+[project.scripts]
+aegis = "aegis.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aegis"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/aegis/ui/settings_page.html" = "aegis/ui/settings_page.html"
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+addopts = [
+    "--cov=aegis",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-fail-under=80",
+]
+
+[tool.coverage.run]
+branch = false
+source = ["aegis"]
+omit = []
+
+[tool.coverage.report]
+precision = 1
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if False:",
+    "raise NotImplementedError",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
