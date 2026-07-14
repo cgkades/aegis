@@ -131,55 +131,81 @@ def test_settings_http_get_and_post(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     port = httpd.server_address[1]
     thread = Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
+
+    import re
+
+    def post(path: str, payload: dict, *, csrf: str | None, host: str | None = None):
+        headers = {"Content-Type": "application/json"}
+        if csrf is not None:
+            headers["X-Aegis-CSRF"] = csrf
+        if host is not None:
+            headers["Host"] = host
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        return urllib.request.urlopen(req)
+
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/") as resp:
             html = resp.read().decode("utf-8")
             assert "Aegis settings" in html
+        # Extract the per-session CSRF token injected into the page.
+        token = re.search(r'name="aegis-csrf" content="([^"]+)"', html).group(1)
+        assert token and token != "__AEGIS_CSRF_TOKEN__"
 
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/settings") as resp:
             data = json.loads(resp.read().decode("utf-8"))
             assert "settings" in data
             assert "env" in data
 
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/settings",
-            data=json.dumps(
-                {
-                    "profile": "standard",
-                    "provider": "realtime",
-                    "model": "gpt-realtime-2.1-mini",
-                    "voice": "alloy",
-                    "reasoning_effort": "low",
-                    "max_session_cost_usd": 3.0,
-                    "max_duration_s": 900,
-                    "idle_timeout_s": 45,
-                    "api_key_env": "OPENAI_API_KEY",
-                    "realtime_url": "wss://api.openai.com/v1/realtime",
-                    "log_level": "info",
-                }
-            ).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req) as resp:
+        settings_payload = {
+            "profile": "standard",
+            "provider": "realtime",
+            "model": "gpt-realtime-2.1-mini",
+            "voice": "alloy",
+            "reasoning_effort": "low",
+            "max_session_cost_usd": 3.0,
+            "max_duration_s": 900,
+            "idle_timeout_s": 45,
+            "api_key_env": "OPENAI_API_KEY",
+            "realtime_url": "wss://api.openai.com/v1/realtime",
+            "log_level": "info",
+        }
+
+        # POST without CSRF token must be rejected (403).
+        try:
+            post("/api/settings", settings_payload, csrf=None)
+            raise AssertionError("expected 403 without CSRF token")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 403
+
+        # POST with a spoofed Host header must be rejected (DNS-rebinding guard).
+        try:
+            post("/api/settings", settings_payload, csrf=token, host="evil.example.com")
+            raise AssertionError("expected 403 with bad Host")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 403
+
+        with post("/api/settings", settings_payload, csrf=token) as resp:
             saved = json.loads(resp.read().decode("utf-8"))
             assert saved["ok"] is True
             assert saved["settings"]["profile"] == "standard"
 
         assert fake_paths.config_file.is_file()
 
-        key_req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/env-key",
-            data=json.dumps(
-                {"key": "OPENAI_API_KEY", "value": "sk-test-settings-key-xyz"}
-            ).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(key_req) as resp:
+        with post(
+            "/api/env-key",
+            {"key": "OPENAI_API_KEY", "value": "sk-test-settings-key-xyz"},
+            csrf=token,
+        ) as resp:
             key_data = json.loads(resp.read().decode("utf-8"))
             assert key_data["ok"] is True
-        assert (tmp_path / ".env").is_file()
-        assert "sk-test-settings-key-xyz" in (tmp_path / ".env").read_text(encoding="utf-8")
+        # Keys are written to the user's secrets file, not $CWD/.env.
+        secrets_file = fake_paths.secrets_env
+        assert secrets_file.is_file()
+        assert "sk-test-settings-key-xyz" in secrets_file.read_text(encoding="utf-8")
     finally:
         httpd.shutdown()

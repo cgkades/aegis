@@ -12,7 +12,7 @@ from typing import Any
 
 from aegis.audio import AudioGraph, AudioGraphConfig, sounddevice_available
 from aegis.audit import AuditLogger
-from aegis.config import AegisConfig, default_paths, load_config
+from aegis.config import AegisConfig, ConfigError, default_paths, load_config
 from aegis.config.paths import AegisPaths
 from aegis.ipc import (
     IpcResponse,
@@ -27,7 +27,8 @@ from aegis.session.machine import SessionMachine
 from aegis.session.runner import run_session_once
 from aegis.util.logging import get_logger, setup_logging
 from aegis.voice.gateway import default_gateway
-from aegis.wake import ConfirmSpeechGate, MockWakeEngine
+from aegis.wake import ConfirmSpeechGate
+from aegis.wake.base import WakeEngine
 from aegis.wake.factory import create_wake_engine
 
 log = get_logger("daemon")
@@ -44,7 +45,7 @@ class AegisDaemon:
         self._session_task: asyncio.Task[int] | None = None
         self._server: asyncio.Server | None = None
         self._graph: AudioGraph | None = None
-        self._wake = None
+        self._wake: WakeEngine | None = None
         self._confirm = ConfirmSpeechGate(
             timeout_s=cfg.wake.confirm_speech_timeout_s,
             sample_rate_hz=cfg.audio.wake_sample_rate_hz,
@@ -64,25 +65,44 @@ class AegisDaemon:
                 self._wake = create_wake_engine(self.cfg.wake)
                 self._wake.start()
             except Exception as exc:
-                log.warning("wake engine failed (%s); using mock energy trigger", exc)
-                self._wake = MockWakeEngine(
-                    phrase=self.cfg.wake.phrase,
-                    energy_threshold=8000.0,
+                # Do NOT silently substitute an energy trigger: that would open a
+                # billed cloud session on any loud noise. Disable wake instead and
+                # tell the user how to start a session manually.
+                log.error(
+                    "wake engine %r failed to start (%s); wake DISABLED. "
+                    "Install the engine (see docs) or start a session with "
+                    "`aegis session start`.",
+                    self.cfg.wake.engine.value,
+                    exc,
                 )
-                self._wake.start()
+                print(
+                    f"aegisd: wake engine unavailable ({exc}); wake disabled. "
+                    "Use `aegis session start` to talk to Aegis.",
+                    file=sys.stderr,
+                )
+                self._wake = None
 
         if sounddevice_available() and self.cfg.wake.enabled:
             try:
                 self._graph = AudioGraph(AudioGraphConfig.from_audio_config(self.cfg.audio))
-                self._graph.start()
+                # Capture-only: the wake loop never plays audio, and holding an
+                # unused output stream open 24/7 blocks device power-down.
+                self._graph.start(capture_only=True)
             except Exception as exc:
                 log.warning("capture unavailable: %s", exc)
                 self._graph = None
 
-        self._server = await asyncio.start_unix_server(
-            self._handle_client,
-            path=str(self.paths.socket_path),
-        )
+        # Restrict the socket's permissions from creation (not just after) so there
+        # is no window where another local user could connect. The 0700 state dir
+        # already blocks traversal; this is defense-in-depth.
+        old_umask = os.umask(0o177)
+        try:
+            self._server = await asyncio.start_unix_server(
+                self._handle_client,
+                path=str(self.paths.socket_path),
+            )
+        finally:
+            os.umask(old_umask)
         try:
             os.chmod(self.paths.socket_path, 0o600)
         except OSError:
@@ -132,7 +152,14 @@ class AegisDaemon:
 
         while not self._stop.is_set():
             if self.machine.state is not SessionState.IDLE:
-                await asyncio.sleep(0.1)
+                # A session is running — wait for it to finish instead of polling
+                # machine.state 10×/sec for its whole (possibly 15-min) duration.
+                task = self._session_task
+                if task is not None and not task.done():
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait({task}, timeout=1.0)
+                else:
+                    await asyncio.sleep(0.1)
                 continue
             frame = await asyncio.to_thread(self._graph.capture.read, 0.2)
             if frame is None:
@@ -165,28 +192,36 @@ class AegisDaemon:
         if self._session_task and not self._session_task.done():
             return {"started": False, "reason": "session_running"}
 
-        # Foreground runner owns its own machine; daemon marks busy via flag
+        # The runner owns its own state machine. The daemon advances its own
+        # machine out of IDLE only so the wake loop and IPC status report "busy"
+        # for the duration of the session task (reset to IDLE in _run's finally).
         self.machine.trigger(
             Trigger.CLI_START if source != "wake" else Trigger.WAKE_WORD,
             skip_confirm=skip_confirm,
         )
-        # Immediately move to connecting-ish busy state then reset after task
-        # Use a simplified approach: set a "running" task and stay non-IDLE via ACTIVE
-        # by faking connect path for IPC status only
         self.audit.log("session_request", extra={"source": source})
 
         async def _run() -> int:
             try:
-                # Reset machine to idle for runner which creates its own machine
-                # Keep daemon machine in ACTIVE-like busy: use CONNECTING+SESSION_READY
+                # Advance the daemon's machine to a busy (non-IDLE) state so the
+                # wake loop and IPC status report "in session"; the runner owns
+                # its own machine.
                 if self.machine.state is SessionState.WAKING:
                     self.machine.trigger(Trigger.CAPTURE_READY)
                 if self.machine.state is SessionState.CONNECTING:
                     self.machine.trigger(Trigger.SESSION_READY)
+                # Lazily bring up the shared graph's output stream for playback
+                # (the daemon runs capture-only while idle) and hand the graph to
+                # the runner so it doesn't open a second set of device streams.
+                if self._graph is not None:
+                    with contextlib.suppress(Exception):
+                        self._graph.playback.start()
                 code = await run_session_once(
                     self.cfg,
-                    backend="realtime",
+                    backend=self.cfg.session.provider.value,
                     paths=self.paths,
+                    graph=self._graph,
+                    install_signal_handlers=False,
                 )
                 return code
             finally:
@@ -198,35 +233,53 @@ class AegisDaemon:
                 if self.machine.state is not SessionState.IDLE:
                     # Force idle by re-creating
                     self.machine = SessionMachine()
+                # Stop playback again so the idle daemon doesn't hold the output
+                # device open between sessions.
+                if self._graph is not None:
+                    with contextlib.suppress(Exception):
+                        self._graph.playback.stop()
                 if self._wake:
                     with contextlib.suppress(Exception):
                         self._wake.reset()
                 self._confirm.clear()
 
         self._session_task = asyncio.create_task(_run(), name="session")
+        self._session_task.add_done_callback(self._on_session_done)
         return {
             "started": True,
             "session_id": self.machine.context.session_id,
             "source": source,
         }
 
+    def _on_session_done(self, task: asyncio.Task[int]) -> None:
+        """Surface session-task failures instead of losing them to GC."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("session task failed: %s", exc, exc_info=exc)
+            with contextlib.suppress(Exception):
+                self.audit.log("session_error", extra={"error": str(exc)})
+
     async def _handle_client(
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+        req_id = "0"
         try:
             line = await asyncio.wait_for(reader.readline(), timeout=10.0)
             if not line:
                 return
             req = parse_request(line.decode("utf-8"))
+            req_id = req.id
             resp = await self._dispatch_ipc(req.op, req.id, req.params or {})
             writer.write(resp.to_line().encode("utf-8"))
             await writer.drain()
         except Exception as exc:
             log.debug("ipc client error: %s", exc)
             try:
-                err = IpcResponse(id="1", ok=False, error=str(exc))
+                err = IpcResponse(id=req_id, ok=False, error=str(exc))
                 writer.write(err.to_line().encode("utf-8"))
                 await writer.drain()
             except Exception:
@@ -278,12 +331,18 @@ def run_daemon(
     """Entry point for `aegis daemon` / systemd."""
     setup_logging("info")
     paths = default_paths()
-    cfg = load_config(
-        Path(config_path) if config_path else None,
-        paths=paths,
-        profile=profile,
-        missing_ok=True,
-    )
+    try:
+        cfg = load_config(
+            Path(config_path) if config_path else None,
+            paths=paths,
+            profile=profile,
+            missing_ok=True,
+        )
+    except ConfigError as exc:
+        # Exit code 78 (EX_CONFIG). Paired with StartLimitBurst in the systemd
+        # unit, this stops a bad config file from crash-looping every RestartSec.
+        print(f"aegisd: configuration error: {exc}", file=sys.stderr)
+        return 78
     setup_logging(cfg.app.log_level)
 
     # Single instance check

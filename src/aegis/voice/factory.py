@@ -25,14 +25,7 @@ def create_voice_session(
 ) -> VoiceSession:
     """Create a voice/chat session for the configured or explicit backend."""
     gw = gateway or default_gateway
-    if backend is not None:
-        provider = backend
-    else:
-        provider = (
-            cfg.session.provider.value
-            if not isinstance(cfg.session.provider, str)
-            else cfg.session.provider
-        )
+    provider = backend if backend is not None else cfg.session.provider.value
     provider = str(provider).lower().replace("-", "_")
 
     if provider in {"mock"}:
@@ -88,11 +81,7 @@ def provider_status(cfg: AegisConfig) -> dict[str, Any]:
     from aegis.llm.chatgpt_oauth import status_dict
     from aegis.llm.registry import probe_provider
 
-    current = (
-        cfg.session.provider.value
-        if hasattr(cfg.session.provider, "value")
-        else str(cfg.session.provider)
-    )
+    current = cfg.session.provider.value
     return {
         "configured": current,
         "model": cfg.session.model,
@@ -100,8 +89,9 @@ def provider_status(cfg: AegisConfig) -> dict[str, Any]:
         "chatgpt_oauth": status_dict(cfg.llm.chatgpt_oauth.token_path),
         "ollama": probe_provider(cfg, "ollama"),
         "litellm": probe_provider(cfg, "litellm"),
+        # Both are stubs whose connect() raises NotImplementedError.
         "gpt_live_available": False,
-        "text_fallback_available": True,
+        "text_fallback_available": False,
         "azure_openai": probe_provider(cfg, "azure_openai"),
         "bedrock": probe_provider(cfg, "bedrock"),
         "providers": [

@@ -8,8 +8,32 @@ Type=simple
 ExecStart=%h/.local/bin/aegis daemon
 Restart=on-failure
 RestartSec=2
+# Stop crash-looping on a bad config (aegis daemon exits 78 = EX_CONFIG): give up
+# after 5 failures in 60s so systemd doesn't hammer a broken config file forever.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 Environment=PYTHONUNBUFFERED=1
 # Provide OPENAI_API_KEY via environment.d or secrets.env — do not hardcode here.
+
+# --- Sandboxing (the daemon runs LLM-directed tools; confine the blast radius) ---
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# ProtectHome=read-only would break tools operating under $HOME; scope writable
+# paths to the XDG dirs Aegis actually uses instead.
+ReadWritePaths=%h/.config/aegis %h/.local/share/aegis %h/.local/state/aegis %h/.cache/aegis
 
 [Install]
 WantedBy=default.target

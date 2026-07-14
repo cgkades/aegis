@@ -7,7 +7,7 @@ from typing import Any
 
 from aegis.config.schema import ToolsConfig
 from aegis.tools.policy import evaluate_read_file, matches_secrets_globs
-from aegis.tools.types import PolicyDecision, ToolResult, ToolSpec
+from aegis.tools.types import PolicyDecision, ToolResult, ToolSpec, err_json
 
 
 async def handle_write_file(
@@ -20,13 +20,13 @@ async def handle_write_file(
     path = arguments.get("path")
     content = arguments.get("content")
     if not isinstance(path, str) or not isinstance(content, str):
-        return ToolResult(output='{"error":"path_and_content_required"}', is_error=True)
+        return ToolResult(output=err_json("path_and_content_required"), is_error=True)
 
-    # Reuse path sandbox rules
+    # Reuse path sandbox rules — honor ANY deny reason, not just "sandbox".
     policy = evaluate_read_file(path, tools)
-    if policy.decision is PolicyDecision.DENY and policy.reason == "sandbox":
+    if policy.decision is PolicyDecision.DENY:
         return ToolResult(
-            output='{"error":"sandbox"}',
+            output=err_json(policy.reason or "denied"),
             is_error=True,
             risk="write",
             decision="deny",
@@ -56,7 +56,9 @@ async def handle_write_file(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
     except OSError as exc:
-        return ToolResult(output=f'{{"error":"{exc}"}}', is_error=True, risk="write")
+        return ToolResult(
+            output=err_json("write_failed", detail=str(exc)), is_error=True, risk="write"
+        )
     return ToolResult(
         output=f"wrote {len(content)} bytes to {target}",
         risk="write",
@@ -82,7 +84,7 @@ async def handle_apply_patch(
     policy = evaluate_read_file(path, tools)
     if policy.decision is PolicyDecision.DENY:
         return ToolResult(
-            output=f'{{"error":"{policy.reason}"}}',
+            output=err_json(policy.reason or "denied"),
             is_error=True,
             risk="write",
             decision="deny",
@@ -100,7 +102,9 @@ async def handle_apply_patch(
     try:
         text = target.read_text(encoding="utf-8")
     except OSError as exc:
-        return ToolResult(output=f'{{"error":"{exc}"}}', is_error=True, risk="write")
+        return ToolResult(
+            output=err_json("read_failed", detail=str(exc)), is_error=True, risk="write"
+        )
     if old not in text:
         return ToolResult(output='{"error":"old_string_not_found"}', is_error=True, risk="write")
     count = text.count(old)
@@ -114,7 +118,9 @@ async def handle_apply_patch(
     try:
         target.write_text(updated, encoding="utf-8")
     except OSError as exc:
-        return ToolResult(output=f'{{"error":"{exc}"}}', is_error=True, risk="write")
+        return ToolResult(
+            output=err_json("write_failed", detail=str(exc)), is_error=True, risk="write"
+        )
     return ToolResult(output=f"patched {target}", risk="write", decision="auto")
 
 

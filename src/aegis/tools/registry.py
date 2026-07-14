@@ -9,10 +9,29 @@ from aegis.config.schema import ToolsConfig
 from aegis.tools.types import (
     ToolResult,
     ToolSpec,
+    err_json,
 )
 from aegis.util.logging import get_logger
+from aegis.util.secrets import redact_secrets
 
 log = get_logger("tools.registry")
+
+
+def _summarize_args(arguments: dict[str, Any]) -> str:
+    """Audit-safe summary: argument keys + redacted argv/path, never raw bodies.
+
+    We keep the executable/path visible (useful for audit) but never log free-text
+    fields like write_file.content, which could carry secrets that redaction misses.
+    """
+    keys = sorted(arguments)
+    parts = [f"keys={keys}"]
+    argv = arguments.get("argv")
+    if isinstance(argv, list):
+        parts.append("argv=" + redact_secrets(" ".join(str(a) for a in argv))[:200])
+    path = arguments.get("path")
+    if isinstance(path, str):
+        parts.append(f"path={path[:200]}")
+    return " ".join(parts)
 
 
 class ToolRegistry:
@@ -80,7 +99,7 @@ class ToolRegistry:
         spec = self._specs.get(name)
         if spec is None:
             return ToolResult(
-                output=f'{{"error":"unknown_tool","name":"{name}"}}',
+                output=err_json("unknown_tool", name=name),
                 is_error=True,
             )
 
@@ -112,7 +131,7 @@ class ToolRegistry:
         except Exception as exc:
             log.exception("tool %s failed", name)
             result = ToolResult(
-                output=f'{{"error":"handler_exception","detail":"{exc}"}}',
+                output=err_json("handler_exception", detail=str(exc)),
                 is_error=True,
                 risk=spec.risk,
             )
@@ -124,8 +143,11 @@ class ToolRegistry:
                 tool_name=name,
                 decision=result.decision,
                 risk=result.risk or spec.risk,
-                args_summary=str(arguments)[:500],
-                result_summary=result.output[:500],
+                # Log the shape of the call, not raw bodies: tool arguments and
+                # outputs can contain file contents, secrets-file reads, or key
+                # material that regex redaction won't reliably catch.
+                args_summary=_summarize_args(arguments),
+                result_summary=f"len={len(result.output)}",
                 error="error" if result.is_error else None,
             )
         return result

@@ -31,6 +31,7 @@ class PorcupineEngine:
         self.sensitivity = sensitivity
         self._porcupine = None
         self._frame_length = 512
+        self._buf = np.zeros(0, dtype=np.int16)
 
     def start(self) -> None:
         try:
@@ -70,16 +71,14 @@ class PorcupineEngine:
         self._porcupine = None
 
     def reset(self) -> None:
-        pass
+        # Drop any partial frame buffered across the previous session.
+        self._buf = np.zeros(0, dtype=np.int16)
 
     def process(self, pcm_16k: np.ndarray) -> WakeEvent | None:
         if self._porcupine is None:
             raise RuntimeError("engine not started")
         audio = np.asarray(pcm_16k, dtype=np.int16).reshape(-1)
-        # Porcupine needs exact frame lengths; process what we can
-        # Buffering left simple: only full frames
-        if not hasattr(self, "_buf"):
-            self._buf = np.zeros(0, dtype=np.int16)
+        # Porcupine needs exact frame lengths; buffer partial frames across calls.
         self._buf = np.concatenate([self._buf, audio])
         event = None
         while self._buf.size >= self._frame_length:

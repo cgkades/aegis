@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="aegis-csrf" content="__AEGIS_CSRF_TOKEN__" />
   <title>Aegis Settings — LLMs</title>
   <style>
     :root {
@@ -295,9 +296,15 @@
       statusEl.className = "status " + (ok === true ? "ok" : ok === false ? "err" : "");
     }
 
+    const CSRF_TOKEN = document.querySelector('meta[name="aegis-csrf"]').content;
+
     async function api(path, opts) {
       const res = await fetch(path, {
-        headers: { "Content-Type": "application/json", ...(opts && opts.headers || {}) },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Aegis-CSRF": CSRF_TOKEN,
+          ...(opts && opts.headers || {}),
+        },
         ...opts,
       });
       const data = await res.json().catch(() => ({}));

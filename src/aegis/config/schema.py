@@ -481,19 +481,10 @@ class AegisConfig(BaseModel):
 
 
 def _looks_private_url(url: str) -> bool:
-    lower = url.lower()
-    if lower.startswith("http://localhost") or lower.startswith("https://localhost"):
-        return True
-    if "://127." in lower or "://[::1]" in lower or "://0.0.0.0" in lower:
-        return True
-    # RFC1918 rough check
-    for prefix in ("://10.", "://192.168.", "://172.16.", "://172.17.", "://172.18."):
-        if prefix in lower:
-            return True
-    for i in range(16, 32):
-        if f"://172.{i}." in lower:
-            return True
-    return False
+    # Single robust hostname-parsing implementation (see aegis.util.net).
+    from aegis.util.net import is_private_url
+
+    return is_private_url(url)
 
 
 # Default read-only shell rules applied when shell is enabled without custom rules.

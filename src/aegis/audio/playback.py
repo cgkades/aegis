@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import queue
 import threading
 from dataclasses import dataclass
@@ -35,6 +36,9 @@ class AudioPlayback:
         self._running = False
         self._actual_rate_hz = self.config.device_rate_hz or 48000
         self._lock = threading.Lock()
+        # Remainder of the chunk currently being drained by the callback. Kept
+        # here (never re-queued) so audio plays back in the order it arrived.
+        self._carry = np.zeros(0, dtype=np.int16)
 
     @property
     def sample_rate_hz(self) -> int:
@@ -54,33 +58,34 @@ class AudioPlayback:
 
             rate = self.config.device_rate_hz or None
 
+            channels = self.config.channels
+
             def _callback(outdata, frames, time_info, status) -> None:  # noqa: ANN001
                 if status:
                     log.debug("playback status: %s", status)
-                try:
-                    chunk = self._queue.get_nowait()
-                except queue.Empty:
-                    outdata.fill(0)
-                    return
-                if chunk is None:
-                    outdata.fill(0)
-                    return
-                pcm = np.asarray(chunk, dtype=np.int16).reshape(-1)
-                if pcm.size < frames:
-                    out = np.zeros(frames, dtype=np.int16)
-                    out[: pcm.size] = pcm
+                need = frames * channels
+                # Accumulate samples in order: leftover carry first, then whole
+                # chunks pulled from the queue, until we have a full block.
+                buf = self._carry
+                while buf.size < need:
+                    try:
+                        chunk = self._queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if chunk is None:
+                        break
+                    buf = np.concatenate((buf, np.asarray(chunk, dtype=np.int16).reshape(-1)))
+                if buf.size >= need:
+                    out = buf[:need]
+                    self._carry = buf[need:]
                 else:
-                    out = pcm[:frames]
-                    rest = pcm[frames:]
-                    if rest.size:
-                        try:
-                            self._queue.put_nowait(rest)
-                        except queue.Full:
-                            pass
-                if self.config.channels == 1:
+                    out = np.zeros(need, dtype=np.int16)
+                    out[: buf.size] = buf
+                    self._carry = np.zeros(0, dtype=np.int16)
+                if channels == 1:
                     outdata[:, 0] = out
                 else:
-                    outdata[:] = out.reshape(-1, self.config.channels)
+                    outdata[:] = out.reshape(-1, channels)
 
             self._stream = sd.OutputStream(
                 samplerate=rate,
@@ -111,6 +116,7 @@ class AudioPlayback:
                     self._queue.get_nowait()
                 except queue.Empty:
                     break
+            self._carry = np.zeros(0, dtype=np.int16)
             log.info("playback stopped")
 
     def write(self, pcm: np.ndarray, source_hz: int | None = None) -> None:
@@ -120,7 +126,15 @@ class AudioPlayback:
         arr = np.asarray(pcm, dtype=np.int16)
         if source_hz and source_hz != self._actual_rate_hz:
             arr = resample_int16(arr, source_hz, self._actual_rate_hz)
-        self._queue.put(arr)
+        # Non-blocking so callers on the asyncio event loop never stall waiting
+        # for the audio device to drain. On overflow drop the oldest chunk.
+        try:
+            self._queue.put_nowait(arr)
+        except queue.Full:
+            with contextlib.suppress(queue.Empty):
+                self._queue.get_nowait()
+            with contextlib.suppress(queue.Full):
+                self._queue.put_nowait(arr)
 
     def write_bytes(self, data: bytes, source_hz: int) -> None:
         pcm = np.frombuffer(data, dtype="<i2")

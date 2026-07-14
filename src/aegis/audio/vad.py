@@ -56,7 +56,9 @@ class EnergyVad:
         if arr.size == 0:
             return self._in_speech or self._hangover_samples_left > 0
 
-        rms = float(np.sqrt(np.mean(np.square(arr))))
+        # RMS via a single dot product — avoids allocating a squared-array temporary
+        # on every frame (runs 50×/sec during a session).
+        rms = float(np.sqrt(np.dot(arr, arr) / arr.size))
         is_loud = rms >= self.config.energy_threshold
         n = arr.size
 

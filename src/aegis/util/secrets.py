@@ -10,9 +10,15 @@ from pathlib import Path
 _REDACT_PATTERNS: list[re.Pattern[str]] = [
     # Prefer specific token shapes first so partial line rewrites don't leave leftovers.
     re.compile(r"(?i)Bearer\s+[A-Za-z0-9._\-]+"),
-    re.compile(r"sk-[A-Za-z0-9_-]{10,}"),
+    re.compile(r"sk-[A-Za-z0-9_-]{10,}"),  # OpenAI-style
+    re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+"),  # JWT
+    re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),  # AWS access key id
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),  # Slack
+    re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),  # GitHub PAT
+    re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b"),  # Google API key
     re.compile(
-        r"(?i)(api[_-]?key|token|secret|password|authorization)\s*[=:]\s*\S+"
+        r"(?i)(api[_-]?key|token|secret|password|passwd|authorization|"
+        r"access[_-]?key|secret[_-]?key)\s*[=:]\s*\S+"
     ),
 ]
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from dataclasses import dataclass, field
 from typing import Any
@@ -68,8 +69,9 @@ class McpStdioClient:
     async def close(self) -> None:
         if self._reader_task:
             self._reader_task.cancel()
-            with contextlib_suppress():
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._reader_task
+        self._fail_pending("client closed")
         if self._proc:
             try:
                 self._proc.terminate()
@@ -80,6 +82,14 @@ class McpStdioClient:
                 except Exception:
                     pass
             self._proc = None
+
+    def _fail_pending(self, reason: str) -> None:
+        """Fail any in-flight requests so callers don't hang until the 60s timeout."""
+        pending = self._pending
+        self._pending = {}
+        for fut in pending.values():
+            if not fut.done():
+                fut.set_exception(ConnectionError(f"mcp {self.name}: {reason}"))
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         return await self._request(
@@ -126,33 +136,32 @@ class McpStdioClient:
         await self._write({"jsonrpc": "2.0", "method": method, "params": params})
 
     async def _write(self, msg: dict[str, Any]) -> None:
-        assert self._proc and self._proc.stdin
+        if self._proc is None or self._proc.stdin is None:
+            raise RuntimeError("mcp client not started")
         data = (json.dumps(msg) + "\n").encode("utf-8")
         self._proc.stdin.write(data)
         await self._proc.stdin.drain()
 
     async def _read_loop(self) -> None:
-        assert self._proc and self._proc.stdout
-        while True:
-            line = await self._proc.stdout.readline()
-            if not line:
-                break
-            try:
-                msg = json.loads(line.decode("utf-8"))
-            except json.JSONDecodeError:
-                continue
-            if "id" in msg and ("result" in msg or "error" in msg):
-                fut = self._pending.pop(int(msg["id"]), None)
-                if fut and not fut.done():
-                    if "error" in msg:
-                        fut.set_exception(RuntimeError(str(msg["error"])))
-                    else:
-                        fut.set_result(msg.get("result"))
-
-
-class contextlib_suppress:
-    def __enter__(self) -> None:
-        return None
-
-    def __exit__(self, *exc: object) -> bool:
-        return True
+        if self._proc is None or self._proc.stdout is None:
+            raise RuntimeError("mcp client not started")
+        stdout = self._proc.stdout
+        try:
+            while True:
+                line = await stdout.readline()
+                if not line:
+                    break
+                try:
+                    msg = json.loads(line.decode("utf-8"))
+                except json.JSONDecodeError:
+                    continue
+                if "id" in msg and ("result" in msg or "error" in msg):
+                    fut = self._pending.pop(int(msg["id"]), None)
+                    if fut and not fut.done():
+                        if "error" in msg:
+                            fut.set_exception(RuntimeError(str(msg["error"])))
+                        else:
+                            fut.set_result(msg.get("result"))
+        finally:
+            # Server died / stream closed — don't leave requests hanging to timeout.
+            self._fail_pending("server closed the connection")

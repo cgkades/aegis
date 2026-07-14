@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -101,8 +100,6 @@ class HotkeyListener:
         self.on_activate = on_activate
         self.info = detect_hotkey_backend(config)
         self._listener = None
-        self._thread: threading.Thread | None = None
-        self._stop = threading.Event()
 
     def start(self) -> ActivationInfo:
         if self.info.backend is not ActivationBackend.X11_PYNPUT:
@@ -124,9 +121,6 @@ class HotkeyListener:
             log.warning("could not parse hotkey %r", self.config.hotkey)
             return self.info
 
-        def on_press(key) -> None:  # noqa: ANN001
-            pass
-
         # Use GlobalHotKeys for chord
         try:
             mapping = {combo: self._safe_activate}
@@ -143,7 +137,6 @@ class HotkeyListener:
         return self.info
 
     def stop(self) -> None:
-        self._stop.set()
         if self._listener is not None:
             try:
                 self._listener.stop()

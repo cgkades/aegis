@@ -65,7 +65,9 @@ async def prompt_cli_approval(
 
 def denial_payload(reason: str = "denied") -> str:
     """Canonical denial string returned to the model."""
-    return f'{{"error":"denied","reason":"{reason}"}}'
+    import json
+
+    return json.dumps({"error": "denied", "reason": reason})
 
 
 def result_from_denial(reason: str = "denied") -> ToolResult:

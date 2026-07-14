@@ -187,12 +187,3 @@ class SessionMachine:
             # Preserve last session_id in metadata for audit; reset flags
             last_id = self._ctx.session_id
             self._ctx = SessionContext(metadata={"last_session_id": last_id})
-
-    def can(self, trigger: Trigger) -> bool:
-        with self._lock:
-            if (
-                self._state is SessionState.WAKING
-                and trigger is Trigger.CAPTURE_READY
-            ):
-                return True
-            return (self._state, trigger) in _TRANSITIONS

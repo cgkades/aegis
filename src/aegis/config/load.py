@@ -29,15 +29,6 @@ def load_toml_file(path: Path) -> dict[str, Any]:
         raise ConfigError(f"cannot read {path}: {exc}") from exc
 
 
-def _normalize_user_dict(raw: dict[str, Any]) -> dict[str, Any]:
-    """Normalize alternate TOML shapes into the schema tree.
-
-    Supports nested tables as written in DESIGN.md. Also accepts a flat
-    ``[[mcp.local.servers]]`` style already nested by tomllib.
-    """
-    return raw
-
-
 def resolve_profile_name(raw: dict[str, Any]) -> ProfileName:
     profile_block = raw.get("profile") or {}
     name = profile_block.get("name", ProfileName.MVP.value)
@@ -56,7 +47,7 @@ def build_config(
     profile: ProfileName | str | None = None,
 ) -> AegisConfig:
     """Merge defaults ← profile overlay ← user dict and validate."""
-    user_dict = _normalize_user_dict(dict(user_dict or {}))
+    user_dict = dict(user_dict or {})
     if profile is not None:
         user_dict = deep_merge(user_dict, {"profile": {"name": str(profile)}})
 

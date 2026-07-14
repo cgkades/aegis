@@ -43,7 +43,12 @@ def sign_headers(
     """Return request headers including Authorization (SigV4)."""
     parsed = urlparse(url)
     host = parsed.netloc
-    canonical_uri = parsed.path or "/"
+    # SigV4 for non-S3 services requires the canonical URI to be URI-encoded a
+    # second time (botocore does this): the request path already contains a
+    # percent-encoded model id like ".../model/amazon.nova-lite-v1%3A0/converse",
+    # so we re-encode, turning "%3A" into "%253A". Signing the single-encoded
+    # path yields a signature AWS rejects with SignatureDoesNotMatch.
+    canonical_uri = quote(parsed.path or "/", safe="/")
     # Query already encoded if present
     canonical_query = parsed.query or ""
 

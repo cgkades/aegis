@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal
 
 RiskClass = Literal["read", "exec", "write", "network", "destroy", "secrets"]
+
+
+def err_json(error: str, **fields: Any) -> str:
+    """Build a valid JSON error payload for tool results.
+
+    Using json.dumps (not f-strings) so exception text containing quotes,
+    backslashes, or newlines can't corrupt the JSON returned to the model.
+    """
+    return json.dumps({"error": error, **fields})
 
 
 class PolicyDecision(StrEnum):

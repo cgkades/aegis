@@ -64,9 +64,22 @@ class AudioGraph:
             )
         )
 
-    def start(self) -> None:
+    def start(self, *, capture_only: bool = False) -> None:
+        """Start capture, and (unless capture_only) playback.
+
+        The always-on daemon runs its wake loop with ``capture_only=True`` so it
+        does not hold an unused output stream open 24/7 (which keeps the audio
+        device from suspending). Rolls back the capture stream if playback fails,
+        so a partial failure never leaves the microphone open.
+        """
         self.capture.start()
-        self.playback.start()
+        if capture_only:
+            return
+        try:
+            self.playback.start()
+        except Exception:
+            self.capture.stop()
+            raise
 
     def stop(self) -> None:
         self.capture.stop()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import subprocess
 import sys
 import threading
@@ -25,6 +26,16 @@ from aegis.util.secrets import resolve_api_key
 log = get_logger("ui.settings")
 
 _HTML_PATH = Path(__file__).with_name("settings_page.html")
+
+# Per-process CSRF token. Injected into the served page and required (via a custom
+# request header, which forces a CORS preflight) on every state-changing POST, so a
+# malicious web page the user has open cannot drive the settings API cross-origin
+# and exfiltrate API keys. Regenerated each server start.
+_CSRF_TOKEN = secrets.token_urlsafe(32)
+
+# Hosts we accept in the Host header — blocks DNS-rebinding attacks that resolve an
+# attacker domain to 127.0.0.1 to reach this loopback server.
+_ALLOWED_HOST_NAMES = {"127.0.0.1", "localhost", "[::1]", "::1"}
 
 
 def _settings_dict(cfg) -> dict[str, Any]:
@@ -130,6 +141,12 @@ class SettingsHandler(BaseHTTPRequestHandler):
         self._send(code, data, "application/json; charset=utf-8")
 
     def _read_json(self) -> dict[str, Any]:
+        # Require exactly application/json — a cross-origin "simple" POST cannot set
+        # this content type without triggering a CORS preflight, so this (with the
+        # CSRF check) blocks drive-by requests from other web pages.
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            raise ValueError("content-type must be application/json")
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b"{}"
         try:
@@ -140,14 +157,28 @@ class SettingsHandler(BaseHTTPRequestHandler):
             raise ValueError("json body must be an object")
         return data
 
+    def _host_ok(self) -> bool:
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip().lower()
+        return host in _ALLOWED_HOST_NAMES
+
+    def _csrf_ok(self) -> bool:
+        token = self.headers.get("X-Aegis-CSRF") or ""
+        return secrets.compare_digest(token, _CSRF_TOKEN)
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
         qs = parse_qs(parsed.query)
 
+        if not self._host_ok():
+            self._json(403, {"error": "bad_host"})
+            return
+
         if path in {"/", "/settings", "/index.html"}:
-            html = _HTML_PATH.read_bytes()
-            self._send(200, html, "text/html; charset=utf-8")
+            html = _HTML_PATH.read_text(encoding="utf-8").replace(
+                "__AEGIS_CSRF_TOKEN__", _CSRF_TOKEN
+            )
+            self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
             return
 
         if path == "/api/settings":
@@ -158,6 +189,13 @@ class SettingsHandler(BaseHTTPRequestHandler):
             self._json(200, {"catalog": list_provider_catalog()})
             return
 
+        try:
+            self._do_get_api(path, qs)
+        except Exception as exc:
+            log.exception("settings GET api error")
+            self._json(500, {"error": str(exc)})
+
+    def _do_get_api(self, path: str, qs: dict[str, list[str]]) -> None:
         if path == "/api/probe":
             load_dotenv()
             cfg = load_config(missing_ok=True)
@@ -191,6 +229,12 @@ class SettingsHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if not self._host_ok():
+            self._json(403, {"error": "bad_host"})
+            return
+        if not self._csrf_ok():
+            self._json(403, {"error": "csrf_failed"})
+            return
         try:
             if path == "/api/settings":
                 body = self._read_json()
@@ -246,7 +290,10 @@ class SettingsHandler(BaseHTTPRequestHandler):
                     raise ValueError("key and value required")
                 if any(c in key for c in " =\n\r"):
                     raise ValueError("invalid key name")
-                env_path = project_root() / ".env"
+                # Write to the user's secrets file (inside the 0700 config dir),
+                # not $CWD/.env — the server may be launched from anywhere and we
+                # must not scatter API keys into arbitrary working directories.
+                env_path = default_paths().secrets_env
                 write_env_key(env_path, key, value)
                 load_dotenv(override=True)
                 self._json(
@@ -370,6 +417,12 @@ def run_settings_server(
 ) -> int:
     """Start the settings HTTP server (blocking)."""
     load_dotenv()
+    # The settings API can read/write secrets and API keys; keep it loopback-only.
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        raise ValueError(
+            f"refusing to bind settings server to non-loopback host {host!r}; "
+            "it exposes API keys and secrets. Use 127.0.0.1."
+        )
     httpd = ThreadingHTTPServer((host, port), SettingsHandler)
     url = f"http://{host}:{port}/"
     print(f"Aegis settings: {url}", file=sys.stderr)
