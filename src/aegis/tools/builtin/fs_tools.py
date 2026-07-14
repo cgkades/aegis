@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from aegis.config.schema import ToolsConfig
-from aegis.tools.policy import evaluate_list_dir, evaluate_read_file
-from aegis.tools.types import PolicyDecision, ToolResult, ToolSpec
+from aegis.tools.policy import evaluate_list_dir, evaluate_read_file, gate
+from aegis.tools.types import ToolResult, ToolSpec, err_json
 
 
 async def handle_list_dir(
@@ -20,29 +20,16 @@ async def handle_list_dir(
 ) -> ToolResult:
     path = arguments.get("path") or "."
     if not isinstance(path, str):
-        return ToolResult(output='{"error":"invalid_path"}', is_error=True)
+        return ToolResult(output=err_json("invalid_path"), is_error=True)
     policy = evaluate_list_dir(path, tools)
-    if policy.decision is PolicyDecision.DENY:
-        return ToolResult(
-            output=f'{{"error":"{policy.reason}"}}',
-            is_error=True,
-            risk=policy.risk,
-            decision="deny",
-        )
-    if policy.decision is PolicyDecision.PROMPT and not approved:
-        return ToolResult(
-            output=f'{{"error":"approval_required","reason":"{policy.reason}"}}',
-            is_error=True,
-            risk=policy.risk,
-            decision="prompt",
-            meta={"needs_approval": True, "arguments": arguments},
-        )
+    if (gated := gate(policy, arguments=arguments, approved=approved)) is not None:
+        return gated
 
     target = Path(path).expanduser().resolve()
     if not target.exists():
-        return ToolResult(output=f'{{"error":"not_found","path":"{path}"}}', is_error=True)
+        return ToolResult(output=err_json("not_found", path=path), is_error=True)
     if not target.is_dir():
-        return ToolResult(output=f'{{"error":"not_a_directory","path":"{path}"}}', is_error=True)
+        return ToolResult(output=err_json("not_a_directory", path=path), is_error=True)
 
     entries = []
     try:
@@ -50,7 +37,7 @@ async def handle_list_dir(
             kind = "dir" if child.is_dir() else "file"
             entries.append({"name": child.name, "type": kind})
     except OSError as exc:
-        return ToolResult(output=f'{{"error":"list_failed","detail":"{exc}"}}', is_error=True)
+        return ToolResult(output=err_json("list_failed", detail=str(exc)), is_error=True)
 
     text = json.dumps({"path": str(target), "entries": entries[:500]}, indent=2)
     if len(entries) > 500:
@@ -67,29 +54,16 @@ async def handle_read_file(
 ) -> ToolResult:
     path = arguments.get("path")
     if not isinstance(path, str) or not path:
-        return ToolResult(output='{"error":"invalid_path"}', is_error=True)
+        return ToolResult(output=err_json("invalid_path"), is_error=True)
     max_bytes = int(arguments.get("max_bytes") or min(tools.max_output_bytes, 50_000))
 
     policy = evaluate_read_file(path, tools)
-    if policy.decision is PolicyDecision.DENY:
-        return ToolResult(
-            output=f'{{"error":"{policy.reason}"}}',
-            is_error=True,
-            risk=policy.risk,
-            decision="deny",
-        )
-    if policy.decision is PolicyDecision.PROMPT and not approved:
-        return ToolResult(
-            output=f'{{"error":"approval_required","reason":"{policy.reason}"}}',
-            is_error=True,
-            risk=policy.risk,
-            decision="prompt",
-            meta={"needs_approval": True, "arguments": arguments},
-        )
+    if (gated := gate(policy, arguments=arguments, approved=approved)) is not None:
+        return gated
 
     target = Path(path).expanduser().resolve()
     if not target.is_file():
-        return ToolResult(output=f'{{"error":"not_a_file","path":"{path}"}}', is_error=True)
+        return ToolResult(output=err_json("not_a_file", path=path), is_error=True)
 
     try:
         data = target.read_bytes()[:max_bytes]
@@ -97,7 +71,7 @@ async def handle_read_file(
         if target.stat().st_size > max_bytes:
             text += "\n…[truncated]"
     except OSError as exc:
-        return ToolResult(output=f'{{"error":"read_failed","detail":"{exc}"}}', is_error=True)
+        return ToolResult(output=err_json("read_failed", detail=str(exc)), is_error=True)
 
     return ToolResult(output=text, risk=policy.risk, decision="auto")
 
@@ -113,24 +87,11 @@ async def handle_search_files(
     pattern = arguments.get("pattern") or "*"
     root = arguments.get("path") or tools.working_directory
     if not isinstance(pattern, str) or not isinstance(root, str):
-        return ToolResult(output='{"error":"invalid_args"}', is_error=True)
+        return ToolResult(output=err_json("invalid_args"), is_error=True)
 
     policy = evaluate_list_dir(root, tools)
-    if policy.decision is PolicyDecision.DENY:
-        return ToolResult(
-            output=f'{{"error":"{policy.reason}"}}',
-            is_error=True,
-            risk=policy.risk,
-            decision="deny",
-        )
-    if policy.decision is PolicyDecision.PROMPT and not approved:
-        return ToolResult(
-            output=f'{{"error":"approval_required","reason":"{policy.reason}"}}',
-            is_error=True,
-            risk=policy.risk,
-            decision="prompt",
-            meta={"needs_approval": True, "arguments": arguments},
-        )
+    if (gated := gate(policy, arguments=arguments, approved=approved)) is not None:
+        return gated
 
     base = Path(root).expanduser().resolve()
     matches: list[str] = []
@@ -141,7 +102,7 @@ async def handle_search_files(
             if len(matches) >= 200:
                 break
     except OSError as exc:
-        return ToolResult(output=f'{{"error":"search_failed","detail":"{exc}"}}', is_error=True)
+        return ToolResult(output=err_json("search_failed", detail=str(exc)), is_error=True)
 
     return ToolResult(
         output=json.dumps({"matches": matches}, indent=2),

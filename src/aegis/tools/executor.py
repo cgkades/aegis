@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import signal
 from pathlib import Path
 
 from aegis.config.schema import ToolsConfig
 from aegis.tools.policy import evaluate_run_command, scrubbed_env
-from aegis.tools.types import PolicyDecision, ToolResult
+from aegis.tools.types import PolicyDecision, ToolResult, err_json
 from aegis.util.logging import get_logger
 
 log = get_logger("tools.executor")
@@ -29,14 +30,14 @@ async def run_argv(
         policy = evaluate_run_command(argv, tools)
         if policy.decision is PolicyDecision.DENY:
             return ToolResult(
-                output=f'{{"error":"{policy.reason}"}}',
+                output=err_json(policy.reason or "denied"),
                 is_error=True,
                 risk=policy.risk,
                 decision="deny",
             )
         if policy.decision is PolicyDecision.PROMPT:
             return ToolResult(
-                output=f'{{"error":"approval_required","reason":"{policy.reason}"}}',
+                output=err_json("approval_required", reason=policy.reason),
                 is_error=True,
                 risk=policy.risk,
                 decision="prompt",
@@ -62,7 +63,7 @@ async def run_argv(
         )
     except OSError as exc:
         return ToolResult(
-            output=f'{{"error":"spawn_failed","detail":"{exc}"}}',
+            output=err_json("spawn_failed", detail=str(exc)),
             is_error=True,
             risk=risk,
             decision="auto",
@@ -72,7 +73,7 @@ async def run_argv(
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except TimeoutError:
         _kill_process_group(proc.pid)
-        with contextlib_suppress():
+        with contextlib.suppress(Exception):
             await proc.wait()
         return ToolResult(
             output='{"error":"timeout"}',
@@ -116,11 +117,3 @@ def _truncate(text: str, max_bytes: int) -> str:
         return text
     cut = raw[: max_bytes - 64]
     return cut.decode("utf-8", errors="replace") + "\n…[truncated]"
-
-
-class contextlib_suppress:
-    def __enter__(self) -> None:
-        return None
-
-    def __exit__(self, *exc: object) -> bool:
-        return True

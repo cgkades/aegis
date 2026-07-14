@@ -108,11 +108,23 @@ def _make_handler(client: McpStdioClient, tool_name: str, server_name: str):
     return handler
 
 
+_MCP_MAX_BYTES = 100_000
+
+
+def _cap(text: str, max_bytes: int = _MCP_MAX_BYTES) -> str:
+    raw = text.encode("utf-8", errors="replace")
+    if len(raw) <= max_bytes:
+        return text
+    return raw[: max_bytes - 16].decode("utf-8", errors="replace") + "\n…[truncated]"
+
+
 def _format_mcp_result(result: Any) -> str:
+    # Cap every branch: a compromised/hostile MCP server must not be able to flood
+    # the model context or exhaust memory (and it feeds prompt-injection defenses).
     if result is None:
         return "(empty)"
     if isinstance(result, str):
-        return result
+        return _cap(result)
     # MCP tools/call often returns {content: [{type:text,text:...}]}
     if isinstance(result, dict):
         content = result.get("content")
@@ -122,9 +134,9 @@ def _format_mcp_result(result: Any) -> str:
                 if isinstance(block, dict) and block.get("type") == "text":
                     parts.append(str(block.get("text", "")))
             if parts:
-                return "\n".join(parts)
-        return json.dumps(result, indent=2, default=str)[:100_000]
-    return str(result)
+                return _cap("\n".join(parts))
+        return _cap(json.dumps(result, indent=2, default=str))
+    return _cap(str(result))
 
 
 def _safe(name: str) -> str:

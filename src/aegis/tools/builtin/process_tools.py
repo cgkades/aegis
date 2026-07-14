@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from aegis.config.schema import ToolsConfig
-from aegis.tools.policy import evaluate_read_file
-from aegis.tools.types import PolicyDecision, ToolResult, ToolSpec
+from aegis.tools.policy import evaluate_read_file, gate
+from aegis.tools.types import ToolResult, ToolSpec, err_json
 
 
 async def handle_list_processes(
@@ -33,7 +33,7 @@ async def handle_list_processes(
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
     except Exception as exc:
-        return ToolResult(output=f'{{"error":"{exc}"}}', is_error=True, risk="read")
+        return ToolResult(output=err_json("ps_failed", detail=str(exc)), is_error=True, risk="read")
     lines = stdout.decode("utf-8", errors="replace").splitlines()
     if not lines:
         return ToolResult(output="(no processes)", risk="read", decision="auto")
@@ -54,30 +54,17 @@ async def handle_tail_log(
 ) -> ToolResult:
     path = arguments.get("path")
     if not isinstance(path, str):
-        return ToolResult(output='{"error":"path_required"}', is_error=True)
+        return ToolResult(output=err_json("path_required"), is_error=True)
     n = int(arguments.get("lines") or 50)
     n = max(1, min(n, 500))
 
     policy = evaluate_read_file(path, tools)
-    if policy.decision is PolicyDecision.DENY:
-        return ToolResult(
-            output=f'{{"error":"{policy.reason}"}}',
-            is_error=True,
-            risk=policy.risk,
-            decision="deny",
-        )
-    if policy.decision is PolicyDecision.PROMPT and not approved:
-        return ToolResult(
-            output=f'{{"error":"approval_required","reason":"{policy.reason}"}}',
-            is_error=True,
-            risk=policy.risk,
-            decision="prompt",
-            meta={"needs_approval": True, "arguments": arguments},
-        )
+    if (gated := gate(policy, arguments=arguments, approved=approved)) is not None:
+        return gated
 
     target = Path(path).expanduser()
     if not target.is_file():
-        return ToolResult(output=f'{{"error":"not_a_file","path":"{path}"}}', is_error=True)
+        return ToolResult(output=err_json("not_a_file", path=path), is_error=True)
     try:
         # Efficient-ish tail for moderate files
         data = target.read_bytes()
@@ -85,7 +72,9 @@ async def handle_tail_log(
         lines = text.splitlines()[-n:]
         return ToolResult(output="\n".join(lines), risk=policy.risk, decision="auto")
     except OSError as exc:
-        return ToolResult(output=f'{{"error":"{exc}"}}', is_error=True, risk="read")
+        return ToolResult(
+            output=err_json("tail_failed", detail=str(exc)), is_error=True, risk="read"
+        )
 
 
 async def handle_env_info(

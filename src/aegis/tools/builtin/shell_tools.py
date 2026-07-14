@@ -6,12 +6,12 @@ from typing import Any
 
 from aegis.config.schema import ToolsConfig
 from aegis.tools.executor import run_argv
-from aegis.tools.policy import evaluate_run_command
+from aegis.tools.policy import evaluate_run_command, gate
 from aegis.tools.types import (
     RUN_COMMAND_PARAMETERS,
-    PolicyDecision,
     ToolResult,
     ToolSpec,
+    err_json,
 )
 
 
@@ -23,39 +23,20 @@ async def handle_run_command(
     spec: ToolSpec | None = None,
 ) -> ToolResult:
     if set(arguments.keys()) - {"argv"}:
-        return ToolResult(
-            output='{"error":"argv_only_schema"}',
-            is_error=True,
-            decision="deny",
-        )
+        return ToolResult(output=err_json("argv_only_schema"), is_error=True, decision="deny")
     argv = arguments.get("argv")
     if not isinstance(argv, list):
-        return ToolResult(
-            output='{"error":"argv_only_schema"}',
-            is_error=True,
-            decision="deny",
-        )
+        return ToolResult(output=err_json("argv_only_schema"), is_error=True, decision="deny")
 
     policy = evaluate_run_command(argv, tools)
-    if policy.decision is PolicyDecision.DENY:
-        return ToolResult(
-            output=f'{{"error":"{policy.reason}"}}',
-            is_error=True,
-            risk=policy.risk,
-            decision="deny",
-        )
-    if policy.decision is PolicyDecision.PROMPT and not approved:
-        return ToolResult(
-            output=f'{{"error":"approval_required","reason":"{policy.reason}"}}',
-            is_error=True,
-            risk=policy.risk,
-            decision="prompt",
-            meta={
-                "needs_approval": True,
-                "argv": policy.resolved_argv or argv,
-                "arguments": arguments,
-            },
-        )
+    gated = gate(
+        policy,
+        arguments=arguments,
+        approved=approved,
+        extra_meta={"argv": policy.resolved_argv or argv},
+    )
+    if gated is not None:
+        return gated
 
     return await run_argv(
         policy.resolved_argv or argv,

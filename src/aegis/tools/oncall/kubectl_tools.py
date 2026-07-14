@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import shutil
 from typing import Any
 
 from aegis.config.schema import ToolsConfig
+from aegis.tools.executor import _kill_process_group
 from aegis.tools.policy import scrubbed_env
 from aegis.tools.types import ToolResult, ToolSpec
 from aegis.util.logging import get_logger
@@ -56,9 +58,7 @@ async def handle_kubectl(
             decision="deny",
         )
 
-    risk = "read" if verb in _READ_VERBS else "write"
-    if verb in _WRITE_VERBS or verb == "delete":
-        risk = "destroy" if verb == "delete" else "write"
+    risk = "destroy" if verb == "delete" else ("read" if verb in _READ_VERBS else "write")
 
     if risk != "read" and not approved:
         return ToolResult(
@@ -104,7 +104,7 @@ async def handle_kubectl(
     for a in extra:
         if a.split("=")[0] in banned:
             return ToolResult(
-                output=f'{{"error":"banned_flag","flag":"{a}"}}',
+                output=json.dumps({"error": "banned_flag", "flag": a}),
                 is_error=True,
                 risk=risk,
                 decision="deny",
@@ -143,9 +143,12 @@ async def handle_kubectl(
             timeout=tools.default_timeout_s,
         )
     except TimeoutError:
+        _kill_process_group(proc.pid)
+        with contextlib.suppress(Exception):
+            await proc.wait()
         return ToolResult(output='{"error":"timeout"}', is_error=True, risk=risk)
     except OSError as exc:
-        return ToolResult(output=f'{{"error":"{exc}"}}', is_error=True, risk=risk)
+        return ToolResult(output=json.dumps({"error": str(exc)}), is_error=True, risk=risk)
 
     out = stdout.decode("utf-8", errors="replace")
     err = stderr.decode("utf-8", errors="replace")

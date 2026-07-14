@@ -87,10 +87,9 @@ def status_cmd() -> None:
 
 
 @main.command("daemon")
-@click.option("--foreground", "foreground", is_flag=True, default=True, help="Run in foreground.")
 @click.pass_context
-def daemon_cmd(ctx: click.Context, foreground: bool) -> None:
-    """Start the always-on aegisd process."""
+def daemon_cmd(ctx: click.Context) -> None:
+    """Start the always-on aegisd process (runs in the foreground)."""
     from aegis.daemon import run_daemon
 
     code = run_daemon(

@@ -24,11 +24,19 @@ dependencies = [
     "pydantic-settings>=2.0",
     "numpy>=2.0",
     "websockets>=14.0",
+    "tomli-w>=1.0",
 ]
 
 [project.optional-dependencies]
 audio = [
     "sounddevice>=0.5",
+]
+# NOTE: openwakeword (the default wake engine) is intentionally NOT a declared
+# extra. It pins tflite-runtime, which has no wheels for Python 3.12+, so uv/pip
+# cannot resolve it on a modern interpreter. Install it manually in a compatible
+# environment (see docs/architecture.md) — Aegis degrades gracefully without it.
+porcupine = [
+    "pvporcupine>=3.0",
 ]
 dev = [
     "pytest>=8.0",

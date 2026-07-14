@@ -32,6 +32,11 @@ class OpenWakeWordEngine:
         self.model_names = model_names or ["hey_jarvis"]  # closest built-in until custom
         self._model = None
         self._cooldown_frames = 0
+        # openWakeWord's feature pipeline is designed for 1280-sample (80ms @ 16kHz)
+        # chunks. We're fed 320-sample (20ms) frames 50×/sec, so buffer up to a full
+        # chunk before calling predict() — 4× fewer inference calls in the idle loop.
+        self._chunk_samples = 1280
+        self._buf = np.zeros(0, dtype=np.int16)
 
     def start(self) -> None:
         try:
@@ -69,29 +74,34 @@ class OpenWakeWordEngine:
             except Exception:
                 pass
         self._cooldown_frames = 0
+        self._buf = np.zeros(0, dtype=np.int16)
 
     def process(self, pcm_16k: np.ndarray) -> WakeEvent | None:
         if self._model is None:
             raise RuntimeError("engine not started")
-        if self._cooldown_frames > 0:
-            self._cooldown_frames -= 1
-            return None
 
         audio = np.asarray(pcm_16k, dtype=np.int16).reshape(-1)
-        if audio.size == 0:
-            return None
+        if audio.size:
+            self._buf = np.concatenate([self._buf, audio])
 
-        # openWakeWord expects int16 mono at 16 kHz
-        prediction = self._model.predict(audio)
-        best_name = None
-        best_score = 0.0
-        for name, score in prediction.items():
-            s = float(score)
-            if s > best_score:
-                best_score = s
-                best_name = name
-
-        if best_name is not None and best_score >= self.threshold:
-            self._cooldown_frames = 15  # debounce ~ few hundred ms depending on hop
-            return WakeEvent(phrase=best_name, score=best_score, engine=self.name)
-        return None
+        event: WakeEvent | None = None
+        # Drain accumulated audio one full chunk at a time.
+        while self._buf.size >= self._chunk_samples:
+            chunk = self._buf[: self._chunk_samples]
+            self._buf = self._buf[self._chunk_samples :]
+            if self._cooldown_frames > 0:
+                self._cooldown_frames -= 1
+                continue
+            # openWakeWord expects int16 mono at 16 kHz
+            prediction = self._model.predict(chunk)
+            best_name = None
+            best_score = 0.0
+            for name, score in prediction.items():
+                s = float(score)
+                if s > best_score:
+                    best_score = s
+                    best_name = name
+            if best_name is not None and best_score >= self.threshold:
+                self._cooldown_frames = 15  # debounce ~ few hundred ms
+                event = WakeEvent(phrase=best_name, score=best_score, engine=self.name)
+        return event

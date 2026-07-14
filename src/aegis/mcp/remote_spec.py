@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urlparse
 
 from aegis.config.schema import AegisConfig, McpApproval
 from aegis.util.logging import get_logger
+from aegis.util.net import is_private_url as _is_private_url
 
 log = get_logger("mcp.remote")
 
@@ -53,22 +53,3 @@ def build_remote_mcp_tools(cfg: AegisConfig) -> list[dict[str, Any]]:
         out.append(entry)
 
     return out
-
-
-def _is_private_url(url: str) -> bool:
-    try:
-        host = (urlparse(url).hostname or "").lower()
-    except Exception:
-        return True
-    if host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}:
-        return True
-    if host.startswith("10.") or host.startswith("192.168."):
-        return True
-    if host.startswith("172."):
-        try:
-            second = int(host.split(".")[1])
-            if 16 <= second <= 31:
-                return True
-        except (IndexError, ValueError):
-            pass
-    return False

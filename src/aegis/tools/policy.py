@@ -14,7 +14,7 @@ from aegis.config.schema import (
     ToolsConfig,
     ToolsSecretsConfig,
 )
-from aegis.tools.types import PolicyDecision, PolicyResult, RiskClass
+from aegis.tools.types import PolicyDecision, PolicyResult, RiskClass, ToolResult, err_json
 
 # Global hygiene: reject shell metacharacter injections in argv elements
 _BAD_ARGV_RE = re.compile(r"[`\n\r]|\$\(|\$\{")
@@ -220,6 +220,23 @@ def evaluate_list_dir(path: str, tools: ToolsConfig) -> PolicyResult:
     return evaluate_read_file(path, tools)
 
 
+def path_within_workdir(path: str, tools: ToolsConfig) -> bool:
+    """True if a directory path is allowed as a working directory for a tool.
+
+    Used by structured git tools to keep their ``path`` (used as cwd) inside the
+    sandbox, matching the file tools' behavior. When sandboxing is off, any path
+    is allowed.
+    """
+    if not tools.sandbox_to_workdir:
+        return True
+    try:
+        rp = Path(path).expanduser().resolve()
+    except OSError:
+        return False
+    workdir = Path(tools.working_directory).expanduser().resolve()
+    return _is_inside(rp, workdir)
+
+
 def matches_secrets_globs(path: str, globs: list[str]) -> bool:
     """Match path against secrets globs (fnmatch on full path and home-relative)."""
     p = path.replace("\\", "/")
@@ -411,3 +428,37 @@ def scrubbed_env(extra_allow: tuple[str, ...] = ()) -> dict[str, str]:
 # re-export for secrets tests
 def secrets_config_matches(path: str, secrets: ToolsSecretsConfig) -> bool:
     return matches_secrets_globs(path, secrets.path_globs)
+
+
+def gate(
+    policy: PolicyResult,
+    *,
+    arguments: dict[str, Any],
+    approved: bool,
+    extra_meta: dict[str, Any] | None = None,
+) -> ToolResult | None:
+    """Shared policy gate for tool handlers.
+
+    Returns a DENY/approval-required ToolResult, or None if the handler should
+    proceed. Collapses the ~15-line block that was copy-pasted across every tool
+    (with drift), and builds JSON via ``err_json`` so error text can't corrupt it.
+    """
+    if policy.decision is PolicyDecision.DENY:
+        return ToolResult(
+            output=err_json(policy.reason or "denied"),
+            is_error=True,
+            risk=policy.risk,
+            decision="deny",
+        )
+    if policy.decision is PolicyDecision.PROMPT and not approved:
+        meta: dict[str, Any] = {"needs_approval": True, "arguments": arguments}
+        if extra_meta:
+            meta.update(extra_meta)
+        return ToolResult(
+            output=err_json("approval_required", reason=policy.reason),
+            is_error=True,
+            risk=policy.risk,
+            decision="prompt",
+            meta=meta,
+        )
+    return None

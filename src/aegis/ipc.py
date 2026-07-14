@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from dataclasses import dataclass
@@ -76,20 +77,12 @@ async def send_request(
         )
     finally:
         writer.close()
-        with contextlib_suppress():
+        with contextlib.suppress(Exception):
             await writer.wait_closed()
 
 
-class contextlib_suppress:
-    def __enter__(self) -> None:
-        return None
-
-    def __exit__(self, *exc: object) -> bool:
-        return True
-
-
 def remove_stale_socket(path: Path) -> None:
-    if path.exists() or path.is_socket():
+    if path.exists():
         try:
             path.unlink()
         except OSError as exc:

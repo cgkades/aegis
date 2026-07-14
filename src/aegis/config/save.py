@@ -5,73 +5,39 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import tomli_w
+
 from aegis.config.schema import AegisConfig
 
+_HEADER = (
+    "# Aegis configuration — managed by `aegis settings` / settings page\n"
+    "# See DESIGN.md and configs/aegis.example.toml for full schema.\n\n"
+)
 
-def _toml_escape(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
 
+def _drop_none(value: Any) -> Any:
+    """Recursively strip None values — TOML has no null; a missing key means default.
 
-def _format_value(value: Any, indent: int = 0) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int) and not isinstance(value, bool):
-        return str(value)
-    if isinstance(value, float):
-        return str(value)
-    if isinstance(value, str):
-        return f'"{_toml_escape(value)}"'
-    if value is None:
-        return '""'
+    Applied to the whole config tree so optional fields (e.g. ShellRule.allowed_flags,
+    McpLocalServer.cwd) round-trip as "absent" rather than crashing the serializer.
+    """
+    if isinstance(value, dict):
+        return {k: _drop_none(v) for k, v in value.items() if v is not None}
     if isinstance(value, list):
-        if not value:
-            return "[]"
-        if all(isinstance(x, str) for x in value):
-            inner = ", ".join(f'"{_toml_escape(x)}"' for x in value)
-            return f"[{inner}]"
-        if all(isinstance(x, (int, float, bool)) for x in value):
-            return "[" + ", ".join(_format_value(x) for x in value) + "]"
-        return "[]"
-    return f'"{_toml_escape(str(value))}"'
+        return [_drop_none(v) for v in value]
+    return value
 
 
 def config_to_toml(cfg: AegisConfig) -> str:
-    """Serialize the settings-relevant portions of config to TOML."""
-    d = cfg.model_dump(mode="json")
-    lines: list[str] = [
-        "# Aegis configuration — managed by `aegis settings` / settings page",
-        "# See DESIGN.md and configs/aegis.example.toml for full schema.",
-        "",
-    ]
+    """Serialize the full config to TOML.
 
-    def emit_table(path: str, table: dict[str, Any]) -> None:
-        lines.append(f"[{path}]")
-        for key, value in table.items():
-            if isinstance(value, dict):
-                continue
-            lines.append(f"{key} = {_format_value(value)}")
-        lines.append("")
-        for key, value in table.items():
-            if isinstance(value, dict):
-                emit_table(f"{path}.{key}", value)
-
-    for name in (
-        "app",
-        "profile",
-        "audio",
-        "wake",
-        "activation",
-        "session",
-        "openai",
-        "llm",
-        "tools",
-        "privacy",
-        "observability",
-    ):
-        if name in d and isinstance(d[name], dict):
-            emit_table(name, d[name])
-
-    return "\n".join(lines).rstrip() + "\n"
+    Uses a real TOML writer so nested tables, arrays-of-tables (``tools.shell.rules``,
+    ``mcp.local.servers``, ``mcp.remote.servers``) and dict fields (``*.env``) survive a
+    round-trip. The previous hand-rolled writer silently dropped them, so saving from
+    the settings page wiped MCP servers and custom shell rules.
+    """
+    data = _drop_none(cfg.model_dump(mode="json"))
+    return _HEADER + tomli_w.dumps(data)
 
 
 def save_config(cfg: AegisConfig, path: Path) -> Path:

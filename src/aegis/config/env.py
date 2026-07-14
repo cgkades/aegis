@@ -14,7 +14,7 @@ def project_root() -> Path:
     # src/aegis/config/env.py → parents[3] = repo root in editable install layout
     here = Path(__file__).resolve()
     candidates = [
-        here.parents[3],  # .../ai-audio-agent
+        here.parents[3],  # repo root in editable-install layout
         Path.cwd(),
     ]
     for c in candidates:

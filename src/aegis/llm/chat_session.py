@@ -11,7 +11,7 @@ import asyncio
 from collections.abc import AsyncIterator
 
 from aegis.config.schema import AegisConfig, SessionConfig
-from aegis.llm.client import ChatMessage, create_llm_client
+from aegis.llm.client import ChatMessage, LLMClient, create_llm_client
 from aegis.voice.protocol import VoiceEvent, VoiceEventType
 
 
@@ -23,8 +23,19 @@ class ChatLLMSession:
         self.provider = provider
         self._queue: asyncio.Queue[VoiceEvent | None] = asyncio.Queue()
         self._connected = False
-        self._client = None
+        self._client: LLMClient | None = None
         self._history: list[ChatMessage] = []
+        # Cap retained turns so a long session doesn't resend unbounded history
+        # every turn (O(n²) tokens) or grow memory without limit. The system
+        # message (index 0) is always kept.
+        self._max_history = max(2, 2 * cfg.session.context.max_transcript_turns)
+
+    def _prune_history(self) -> None:
+        if len(self._history) <= self._max_history:
+            return
+        system = self._history[:1]
+        tail = self._history[-(self._max_history - 1) :]
+        self._history = [*system, *tail]
 
     async def connect(self, config: SessionConfig) -> None:
         self._client = create_llm_client(self.cfg, provider=self.provider)
@@ -66,6 +77,7 @@ class ChatLLMSession:
             return
         await self._queue.put(VoiceEvent(type=VoiceEventType.USER_TRANSCRIPT, text=text))
         self._history.append(ChatMessage(role="user", content=text))
+        self._prune_history()
         resp = await self._client.chat(self._history)
         self._history.append(ChatMessage(role="assistant", content=resp.text))
         await self._queue.put(
@@ -83,6 +95,7 @@ class ChatLLMSession:
         self._history.append(ChatMessage(role="user", content=note))
         if self._client is None:
             return
+        self._prune_history()
         resp = await self._client.chat(self._history)
         self._history.append(ChatMessage(role="assistant", content=resp.text))
         await self._queue.put(

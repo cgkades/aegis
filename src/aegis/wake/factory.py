@@ -13,24 +13,19 @@ from aegis.wake.porcupine import PorcupineEngine
 def create_wake_engine(config: WakeConfig, *, allow_mock: bool = False) -> WakeEngine:
     """Create the configured wake engine.
 
-    If ``allow_mock`` is True and the real engine cannot be imported, fall back
-    to :class:`MockWakeEngine` (useful for CI).
+    Construction is cheap and cannot fail on a missing dependency — the heavy
+    import happens in ``engine.start()``. Callers that need a fallback should
+    handle ``start()`` raising (the daemon does). ``allow_mock`` is retained for
+    CI callers that want a mock without touching real engine internals.
     """
+    if allow_mock:
+        return MockWakeEngine(phrase=config.phrase)
     if config.engine is WakeEngineName.OPENWAKEWORD:
-        try:
-            return OpenWakeWordEngine(
-                phrase=config.phrase,
-                threshold=config.threshold,
-                custom_model_path=config.custom_model_path,
-            )
-        except Exception:
-            if allow_mock:
-                return MockWakeEngine(phrase=config.phrase)
-            return OpenWakeWordEngine(
-                phrase=config.phrase,
-                threshold=config.threshold,
-                custom_model_path=config.custom_model_path,
-            )
+        return OpenWakeWordEngine(
+            phrase=config.phrase,
+            threshold=config.threshold,
+            custom_model_path=config.custom_model_path,
+        )
     if config.engine is WakeEngineName.PORCUPINE:
         return PorcupineEngine(
             phrase=config.phrase,
