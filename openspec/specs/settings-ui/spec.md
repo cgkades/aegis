@@ -25,6 +25,19 @@ The UI SHALL expose configuration panels for OpenAI/Realtime, ChatGPT OAuth, Azu
 - **THEN** Bedrock fields (region, model id, profile) are shown
 - **AND** unrelated provider panels are hidden
 
+### Requirement: Voice capability warning
+
+The UI SHALL clearly disclose when the selected provider is text-only and cannot
+yet power spoken sessions without configured cascaded STT/TTS. The warning MUST be
+visible in the selected-provider panel and point to a voice-capable provider or
+the cascade configuration as the next action.
+
+#### Scenario: Text-only provider selected
+
+- **WHEN** the user selects Ollama, Azure, Bedrock, LiteLLM, OpenAI chat, or ChatGPT OAuth without a cascade
+- **THEN** the UI marks it as text-only for voice
+- **AND** it does not imply that wake/hotkey activation will produce spoken interaction
+
 ### Requirement: Save config and env secrets
 
 The UI SHALL save non-secret provider settings to config.toml and allow writing selected secret keys to project `.env`.

@@ -12,7 +12,7 @@
 | **Agent notes** | [`AGENTS.md`](./AGENTS.md) |
 | **As-of** | 2026-07-13 (multi-LLM + Azure + Bedrock shipped) |
 
-This file is the **human entry point**. Behavioral contracts live under `openspec/` in OpenSpec format (`### Requirement:` / `#### Scenario:` with SHALL/MUST). Edit those files (or open change proposals) to adjust personal intent; keep `DESIGN.md` for architecture and PR history.
+This file is the **human entry point**. Behavioral contracts live under `openspec/` in OpenSpec format (`### Requirement:` / `#### Scenario:` with SHALL/MUST). They describe the intended Aegis product; implementation may lag a requirement and must not silently weaken it. Keep `DESIGN.md` for architecture and PR history.
 
 ---
 
@@ -35,22 +35,22 @@ Aegis is a **local-first, always-on personal voice/agent** for Linux. It listens
 
 ---
 
-## Capability map (current source of truth)
+## Capability map (product contract)
 
-| Capability | Spec | Status |
-| --- | --- | --- |
-| Product identity & trust model | [product](./openspec/specs/product/spec.md) | Locked |
-| Privacy & security | [privacy-security](./openspec/specs/privacy-security/spec.md) | Implemented |
-| Configuration & profiles | [configuration](./openspec/specs/configuration/spec.md) | Implemented |
-| LLM / voice providers | [llm-providers](./openspec/specs/llm-providers/spec.md) | Implemented |
-| Session lifecycle | [session](./openspec/specs/session/spec.md) | Implemented |
-| Wake & activation | [wake-activation](./openspec/specs/wake-activation/spec.md) | Implemented (engines pluggable; custom model optional) |
-| Tools & policy | [tools-policy](./openspec/specs/tools-policy/spec.md) | Implemented |
-| MCP | [mcp](./openspec/specs/mcp/spec.md) | Implemented |
-| Daemon & IPC | [daemon-ipc](./openspec/specs/daemon-ipc/spec.md) | Implemented |
-| CLI | [cli](./openspec/specs/cli/spec.md) | Implemented |
-| Settings UI | [settings-ui](./openspec/specs/settings-ui/spec.md) | Implemented |
-| Cost, audit, observability | [observability](./openspec/specs/observability/spec.md) | Implemented |
+| Capability | Spec |
+| --- | --- |
+| Product identity & trust model | [product](./openspec/specs/product/spec.md) |
+| Privacy & security | [privacy-security](./openspec/specs/privacy-security/spec.md) |
+| Configuration & profiles | [configuration](./openspec/specs/configuration/spec.md) |
+| LLM / voice providers | [llm-providers](./openspec/specs/llm-providers/spec.md) |
+| Session lifecycle | [session](./openspec/specs/session/spec.md) |
+| Wake & activation | [wake-activation](./openspec/specs/wake-activation/spec.md) |
+| Tools & policy | [tools-policy](./openspec/specs/tools-policy/spec.md) |
+| MCP | [mcp](./openspec/specs/mcp/spec.md) |
+| Daemon & IPC | [daemon-ipc](./openspec/specs/daemon-ipc/spec.md) |
+| CLI | [cli](./openspec/specs/cli/spec.md) |
+| Settings UI | [settings-ui](./openspec/specs/settings-ui/spec.md) |
+| Cost, audit, observability | [observability](./openspec/specs/observability/spec.md) |
 
 ---
 
@@ -66,6 +66,10 @@ Aegis is a **local-first, always-on personal voice/agent** for Linux. It listens
 | `litellm` | OpenAI-compatible proxy | No | Yes | `LITELLM_API_KEY` optional |
 | `ollama` | Local Ollama | No | Yes | Local HTTP |
 | `mock` | Offline dogfood | Simulated | Simulated | None |
+
+When a text-only provider is selected, Settings and every available status/presence
+surface MUST disclose that voice is unavailable until a cascaded STT/TTS path is
+configured. Activation MUST explain the limitation instead of failing silently.
 
 ---
 

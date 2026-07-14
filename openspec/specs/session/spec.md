@@ -62,6 +62,34 @@ Sessions SHALL honor configured maximum duration and maximum session cost limits
 - **WHEN** the session exceeds that duration
 - **THEN** the session ends cleanly
 
+### Requirement: Turn completion and idle-session timeout
+
+The system SHALL distinguish the end of a user turn from teardown of an inactive
+voice session. Realtime VAD (or release of push-to-talk) SHALL determine when the
+user has finished a turn. A separately configurable `idle_timeout_s`, defaulting
+to 45 seconds, SHALL end an active but quiet session and return it to local-only
+idle behavior. The idle timer MUST pause while the user is speaking, the assistant
+is speaking, a tool is running, or approval is pending.
+
+#### Scenario: Quiet session after a response
+
+- **GIVEN** the assistant has completed a response and no user turn begins
+- **WHEN** `idle_timeout_s` elapses
+- **THEN** the voice session ends cleanly
+- **AND** the daemon returns to local wake / hotkey / push-to-talk readiness
+
+#### Scenario: User begins another turn
+
+- **GIVEN** an active session is waiting for the next request
+- **WHEN** local VAD detects user speech or push-to-talk is held
+- **THEN** the idle timer is reset or paused until that turn is complete
+
+#### Scenario: Push-to-talk follow-up
+
+- **GIVEN** the user released push-to-talk after a request and the assistant replied
+- **WHEN** the user holds push-to-talk again before `idle_timeout_s` elapses
+- **THEN** the existing session accepts the follow-up turn and retains its conversation context
+
 ### Requirement: Context retention limits
 
 The system SHALL apply context retention limits (tool result truncation, transcript turn caps) so long sessions do not unbounded-grow context.

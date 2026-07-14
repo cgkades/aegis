@@ -30,6 +30,20 @@ Wake detection MUST run locally. Wake scoring MUST NOT require cloud audio strea
 - **WHEN** audio frames are processed for KWS
 - **THEN** processing remains on-device
 
+### Requirement: Locked wake phrase
+
+The product wake phrase SHALL be **"Hey Aegis"**. The default local wake
+configuration MUST target that phrase and MUST NOT silently substitute a different
+phrase when its required model is unavailable. It MAY disable passive wake in that
+case, but MUST report how to restore it.
+
+#### Scenario: Required model is unavailable
+
+- **GIVEN** the configured "Hey Aegis" wake model is unavailable
+- **WHEN** the daemon starts
+- **THEN** it does not open a cloud session or substitute a generic wake phrase
+- **AND** it reports that passive wake is disabled and identifies the model/configuration needed
+
 ### Requirement: Optional confirm-speech gate
 
 When confirm-speech timeout is configured, the system SHOULD require local speech after a wake hit before opening a cloud session, to reduce false-accept cost.
@@ -48,6 +62,31 @@ Activation via CLI/socket MUST work even when global hotkey grab is unavailable 
 
 - **WHEN** a user runs `aegis session start` against a running daemon
 - **THEN** the daemon begins a session without requiring wake audio
+
+### Requirement: Hotkey and push-to-talk activation
+
+The system SHALL offer configurable activation-hotkey and push-to-talk-hotkey
+paths in addition to passive "Hey Aegis" wake. They MUST work through a native
+global grab where supported or through a documented desktop-environment keybinding
+fallback where it is not. Push-to-talk MUST keep cloud mic uplink disabled until
+the user holds the configured key, start a session when necessary, mute uplink
+when the key is released, and provide a turn-end signal on release. The session
+MUST remain available for the assistant's reply and later push-to-talk turns until
+the normal active-session idle timeout ends it.
+
+#### Scenario: Activation hotkey
+
+- **GIVEN** passive wake is disabled or unavailable
+- **WHEN** the user invokes the configured activation hotkey or its DE keybinding
+- **THEN** the daemon begins a session without idle cloud audio
+
+#### Scenario: Push-to-talk starts a session and completes a turn
+
+- **GIVEN** the daemon is locally idle or a voice session is active
+- **WHEN** the user holds the configured push-to-talk hotkey
+- **THEN** the daemon starts or reuses a voice session and microphone audio is eligible for uplink only while held
+- **AND** releasing it mutes uplink and completes the user's turn
+- **AND** the session remains open for the response and a later push-to-talk follow-up
 
 ### Requirement: Hotkey best-effort with DE guidance
 

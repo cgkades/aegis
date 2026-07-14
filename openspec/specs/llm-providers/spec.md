@@ -13,13 +13,29 @@ The system SHALL support selecting a session backend among at least: `realtime`,
 #### Scenario: CLI backend selection
 
 - **WHEN** the user runs `aegis session once --backend <provider>`
-- **THEN** a session is created for that provider without requiring a config rewrite
+- **THEN** the selected provider's voice capability is checked without requiring a config rewrite
+- **AND** an unavailable voice path is rejected with a clear explanation rather than opening a broken session
 - **AND** unsupported names are rejected by CLI choice validation
 
 #### Scenario: Config provider selection
 
 - **WHEN** `session.provider` is set in config
 - **THEN** daemon/session flows use that provider unless overridden
+- **AND** a text-only provider is visibly identified as unavailable for voice until cascaded STT/TTS is configured
+
+### Requirement: Text-only provider disclosure
+
+The system SHALL make the voice capability of the selected provider visible before
+the user attempts activation. Settings and each available status/presence surface
+MUST show a clear warning for a text-only provider, including that cascaded
+STT/TTS is required for spoken interaction.
+
+#### Scenario: Text-only provider selected
+
+- **GIVEN** `session.provider` is a chat-only provider without a configured cascade
+- **WHEN** Settings or a status/presence surface is displayed
+- **THEN** it shows that the provider is text-only and cannot currently serve voice activation
+- **AND** an attempted voice activation explains the limitation and how to change provider or configure a cascade
 
 ### Requirement: Realtime duplex voice
 

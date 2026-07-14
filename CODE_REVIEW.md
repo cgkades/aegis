@@ -77,19 +77,25 @@ Rules of thumb:
 >   `config/`, `ipc.py`. Behavioral contracts: `openspec/specs/`; architecture:
 >   `DESIGN.md`; agent notes: `AGENTS.md`.
 > - **Stack:** Python 3.12+, **uv**, Click CLI, pytest + coverage (≥80% gate),
->   ruff. Audio/wake: PipeWire/PulseAudio, openWakeWord (default; Porcupine
->   pluggable). Config under `~/.config/aegis/`; state/logs under
+>   ruff. Audio/wake: `sounddevice` / PortAudio over the host Linux audio stack,
+>   openWakeWord (default; Porcupine pluggable). Config under `~/.config/aegis/`; state/logs under
 >   `~/.local/state/aegis/`, `~/.local/share/aegis/`.
 > - **Tests:** `uv sync --all-extras` then `uv run pytest` (coverage enforced
 >   via pyproject), `uv run ruff check src tests`. Smoke: `uv run aegis doctor`
 >   and `uv run aegis session once --backend mock`.
-> - **Caveats:** Spec index is `SPEC.md` → `openspec/specs/` (current behavior)
->   and `openspec/changes/` (planned only — cascaded STT/TTS, custom wake
->   model, tray, GPT-Live, hybrid text+tool session are **not** current).
->   Prefer specs for intent; design for architecture. Implementation spine is
->   complete as of 2026-07-13 (multi-LLM + Azure + Bedrock shipped). Security
->   and tool-policy bugs are high stakes — treat policy/approval/secret paths
->   as critical surface.
+> - **Caveats:** Spec index is `SPEC.md` → `openspec/specs/` (desired product
+>   behavior) and `openspec/changes/` (staged implementation work — cascaded
+>   STT/TTS, custom wake model, tray, GPT-Live, hybrid text+tool session are
+>   **not** current).
+>   `realtime` is the only live voice backend; the other providers are text-only
+>   and `session once` rejects them until cascaded STT/TTS ships. No “Hey Aegis”
+>   wake model is bundled, so the default openWakeWord configuration disables wake
+>   safely unless `wake.custom_model_path` is supplied. Global hotkey capture is
+>   not daemon-wired; use IPC/CLI or a DE keybinding. The suite and mock smoke
+>   tests do not validate real audio hardware, live provider credentials, or
+>   third-party MCP servers. Prefer specs for intent; design for architecture.
+>   Security and tool-policy bugs are high stakes — treat policy/approval/secret
+>   paths as critical surface.
 >
 > ### Ground rules
 > 1. **Establish a baseline first**: run the test suite and linter, record
