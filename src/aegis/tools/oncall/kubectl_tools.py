@@ -20,6 +20,34 @@ log = get_logger("tools.kubectl")
 _READ_VERBS = {"get", "describe", "logs", "top", "api-resources", "api-versions", "explain"}
 _WRITE_VERBS = {"apply", "create", "delete", "patch", "scale", "rollout", "exec"}
 
+# `extra_args` exist for read-only presentation and selection flags, not to
+# smuggle a second target cluster or namespace into an otherwise constrained
+# structured invocation. Each flag that consumes a following value is listed so
+# a value cannot be mistaken for a positional argument in future validation.
+_SAFE_EXTRA_FLAGS = {
+    "-o",
+    "--output",
+    "-l",
+    "--selector",
+    "--field-selector",
+    "--show-labels",
+    "--no-headers",
+    "--sort-by",
+    "--tail",
+    "--previous",
+    "--since",
+    "--since-time",
+    "--timestamps",
+    "-c",
+    "--container",
+}
+_EXTRA_FLAGS_WITH_VALUE = _SAFE_EXTRA_FLAGS - {
+    "--show-labels",
+    "--no-headers",
+    "--previous",
+    "--timestamps",
+}
+
 
 async def handle_kubectl(
     arguments: dict[str, Any],
@@ -69,20 +97,6 @@ async def handle_kubectl(
             meta={"needs_approval": True, "arguments": arguments},
         )
 
-    if namespace and kcfg.allowed_namespaces and namespace not in kcfg.allowed_namespaces:
-        return ToolResult(
-            output=json.dumps(
-                {
-                    "error": "namespace_not_allowed",
-                    "namespace": namespace,
-                    "allowed": kcfg.allowed_namespaces,
-                }
-            ),
-            is_error=True,
-            risk=risk,
-            decision="deny",
-        )
-
     if context and kcfg.context_allowlist and context not in kcfg.context_allowlist:
         return ToolResult(
             output=json.dumps(
@@ -99,16 +113,45 @@ async def handle_kubectl(
 
     if not isinstance(extra, list) or not all(isinstance(x, str) for x in extra):
         return ToolResult(output='{"error":"extra_args_must_be_string_array"}', is_error=True)
-    # Block dangerous extra flags
-    banned = {"--token", "--as", "--as-group", "--kubeconfig", "--password", "--username"}
+    # Defense in depth: these flags must never be accepted through `extra_args`,
+    # even if a future safe-flag table change accidentally includes them.
+    banned = {
+        "--token", "--as", "--as-group", "--kubeconfig", "--password", "--username",
+        "-n", "--namespace", "-A", "--all-namespaces", "--context", "--server",
+    }
     for a in extra:
-        if a.split("=")[0] in banned:
+        flag = a.split("=", 1)[0]
+        if flag in banned or (flag.startswith("-n") and flag != "-n"):
             return ToolResult(
                 output=json.dumps({"error": "banned_flag", "flag": a}),
                 is_error=True,
                 risk=risk,
                 decision="deny",
             )
+    if not _safe_extra_args(extra):
+        bad = next((a for a in extra if a.startswith("-")), "extra_args")
+        return ToolResult(
+            output=json.dumps({"error": "extra_arg_not_allowed", "argument": bad}),
+            is_error=True,
+            risk=risk,
+            decision="deny",
+        )
+
+    if kcfg.allowed_namespaces and (
+        not isinstance(namespace, str) or namespace not in kcfg.allowed_namespaces
+    ):
+        return ToolResult(
+            output=json.dumps(
+                {
+                    "error": "namespace_not_allowed",
+                    "namespace": namespace or "",
+                    "allowed": kcfg.allowed_namespaces,
+                }
+            ),
+            is_error=True,
+            risk=risk,
+            decision="deny",
+        )
 
     if not shutil.which("kubectl"):
         return ToolResult(
@@ -165,6 +208,30 @@ async def handle_kubectl(
         decision="auto",
         meta={"argv": argv, "exit_code": proc.returncode},
     )
+
+
+def _safe_extra_args(extra: list[str]) -> bool:
+    """Validate a small, presentation-only kubectl flag language."""
+    index = 0
+    while index < len(extra):
+        arg = extra[index]
+        if not arg.startswith("-"):
+            return False
+        flag, separator, value = arg.partition("=")
+        if flag not in _SAFE_EXTRA_FLAGS:
+            return False
+        if flag in _EXTRA_FLAGS_WITH_VALUE:
+            if separator:
+                if not value or value.startswith("-"):
+                    return False
+            else:
+                index += 1
+                if index >= len(extra) or extra[index].startswith("-"):
+                    return False
+        elif separator:
+            return False
+        index += 1
+    return True
 
 
 def kubectl_tool_specs() -> list[ToolSpec]:

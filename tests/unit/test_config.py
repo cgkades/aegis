@@ -13,6 +13,7 @@ from aegis.config import (
     load_config,
     validate_config_file,
 )
+from aegis.config.load import config_to_display_dict
 from aegis.config.paths import AegisPaths
 from aegis.config.profiles import deep_merge, profile_overlay
 from aegis.config.schema import ProfileName
@@ -27,6 +28,76 @@ def test_default_mvp_config() -> None:
     assert cfg.tools.enabled == ["fs"]
     assert cfg.wake.engine.value == "openwakeword"
     assert cfg.audio.local_vad_enabled is True
+
+
+def test_llm_openai_block_is_not_overwritten_by_legacy_defaults() -> None:
+    cfg = build_config(
+        {"llm": {"openai": {"chat_base_url": "https://example.invalid/v1"}}}
+    )
+    assert cfg.openai.chat_base_url == "https://example.invalid/v1"
+    assert cfg.llm.openai.chat_base_url == "https://example.invalid/v1"
+
+
+def test_config_display_redacts_mcp_credentials() -> None:
+    cfg = build_config(
+        {
+            "mcp": {
+                "remote": {
+                    "servers": [
+                        {
+                            "label": "demo",
+                            "server_url": "https://example.com/mcp",
+                            "authorization": "env:MCP_AUTHORIZATION",
+                            "headers": {"X-API-Key": "env:MCP_API_KEY"},
+                        }
+                    ]
+                }
+            }
+        }
+    )
+
+    displayed = config_to_display_dict(cfg)
+    server = displayed["mcp"]["remote"]["servers"][0]
+    assert server["authorization"] == "[REDACTED]"
+    assert server["headers"] == "[REDACTED]"
+
+
+def test_mcp_literal_credentials_are_rejected() -> None:
+    with pytest.raises(ConfigError, match="env:VARIABLE"):
+        build_config(
+            {
+                "mcp": {
+                    "connectors": {
+                        "items": [
+                            {
+                                "label": "demo",
+                                "connector_id": "connector_demo",
+                                "authorization": "literal-secret",
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+
+
+def test_mcp_local_literal_secret_env_is_rejected() -> None:
+    with pytest.raises(ConfigError, match="env:VARIABLE"):
+        build_config(
+            {
+                "mcp": {
+                    "local": {
+                        "servers": [
+                            {
+                                "name": "demo",
+                                "command": "demo",
+                                "env": {"API_KEY": "literal-secret"},
+                            }
+                        ]
+                    }
+                }
+            }
+        )
 
 
 def test_oncall_profile_raises_model_and_kubectl() -> None:

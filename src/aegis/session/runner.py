@@ -33,6 +33,17 @@ log = get_logger("session.runner")
 
 # Poll interval for cost/duration caps while waiting for the next voice event.
 _EVENT_POLL_INTERVAL_S = 0.25
+_TEXT_ONLY_BACKENDS = {
+    "ollama",
+    "litellm",
+    "chatgpt_oauth",
+    "openai_api",
+    "azure_openai",
+    "azure",
+    "bedrock",
+    "aws_bedrock",
+    "hybrid_text_tools",
+}
 
 
 async def run_session_once(
@@ -52,6 +63,13 @@ async def run_session_once(
     when running inside a process (the daemon) that owns the loop's signal handlers.
     """
     paths = paths or default_paths()
+    if str(backend).lower().replace("-", "_") in _TEXT_ONLY_BACKENDS:
+        print(
+            f"{backend} is a text-only provider and cannot be used by the voice session CLI yet. "
+            "Use --backend realtime or mock; cascaded STT/TTS is not implemented.",
+            file=sys.stderr,
+        )
+        return 2
     duration = max_seconds if max_seconds is not None else float(cfg.session.max_duration_s)
     deadline = time.monotonic() + duration
 
@@ -115,6 +133,10 @@ async def run_session_once(
             graph = None
 
     try:
+        # Realtime is a voice-only transport. Opening a billable cloud session
+        # without a capture device leaves the user unable to send a turn.
+        if graph is None and str(backend).lower() == "realtime":
+            raise RuntimeError("audio capture unavailable for realtime voice session")
         print(
             format_session_banner(
                 session_id=machine.context.session_id,
@@ -124,12 +146,31 @@ async def run_session_once(
             ),
             file=sys.stderr,
         )
-        await session.connect(cfg.session)
+        await asyncio.wait_for(
+            session.connect(cfg.session), timeout=cfg.session.connect_timeout_s
+        )
         machine.trigger(Trigger.SESSION_READY)
         status.set_presence(
             Presence.ACTIVE,
             detail=f"id={machine.context.session_id}",
         )
+    except TimeoutError:
+        log.error("connect timed out after %ss", cfg.session.connect_timeout_s)
+        print(
+            f"connect timed out after {cfg.session.connect_timeout_s}s",
+            file=sys.stderr,
+        )
+        with contextlib.suppress(Exception):
+            machine.trigger(Trigger.CONNECT_TIMEOUT)
+        if graph and owns_graph:
+            graph.stop()
+        if mcp_bridge is not None:
+            with contextlib.suppress(Exception):
+                await mcp_bridge.close()
+        with contextlib.suppress(Exception):
+            await session.end()
+        status.set_presence(Presence.IDLE)
+        return 1
     except Exception as exc:
         log.error("connect failed: %s", exc)
         print(f"connect failed: {exc}", file=sys.stderr)
@@ -164,6 +205,7 @@ async def run_session_once(
         )
 
     auto_end_mock = str(backend) == "mock"
+    last_activity = time.monotonic()
 
     # Persistent iterator + in-flight __anext__ task. We never cancel the pending
     # task on a poll timeout — cancelling it would throw CancelledError into the
@@ -174,6 +216,12 @@ async def run_session_once(
 
     try:
         while not stop.is_set() and time.monotonic() < deadline:
+            if uplink_task is not None and uplink_task.done():
+                if not uplink_task.cancelled() and (exc := uplink_task.exception()) is not None:
+                    log.error("uplink failed: %s", exc, exc_info=exc)
+                    with contextlib.suppress(Exception):
+                        machine.trigger(Trigger.ERROR)
+                    break
             # Cost / duration caps
             if metrics.exceeds_cost_cap(cfg.session.max_session_cost_usd):
                 log.warning(
@@ -190,6 +238,14 @@ async def run_session_once(
             if metrics.duration_s >= cfg.session.max_duration_s:
                 with contextlib.suppress(Exception):
                     machine.trigger(Trigger.MAX_DURATION)
+                break
+            if (
+                machine.state is SessionState.ACTIVE
+                and time.monotonic() - last_activity >= cfg.session.idle_timeout_s
+            ):
+                log.info("session idle timeout after %ss", cfg.session.idle_timeout_s)
+                with contextlib.suppress(Exception):
+                    machine.trigger(Trigger.SILENCE_TIMEOUT)
                 break
 
             if pending is None:
@@ -222,6 +278,7 @@ async def run_session_once(
             elif event.type is VoiceEventType.USER_TRANSCRIPT and event.text:
                 # A new user turn resets the per-turn tool-call budget.
                 registry.reset_turn()
+                last_activity = time.monotonic()
                 context.add_transcript("user", event.text)
                 print(f"You: {event.text}", flush=True)
             elif event.type is VoiceEventType.TOOL_CALL and event.tool_call:
@@ -269,7 +326,7 @@ async def run_session_once(
                 await pending
         if uplink_task:
             uplink_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await uplink_task
         if machine.state is SessionState.ACTIVE:
             with contextlib.suppress(Exception):

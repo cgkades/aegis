@@ -383,11 +383,16 @@ async def test_chat_session_flow(monkeypatch: pytest.MonkeyPatch) -> None:
         provider = "ollama"
         model = "x"
 
+        def __init__(self) -> None:
+            self.messages = []
+
         async def chat(self, messages, **kwargs):
+            self.messages = messages
             return LLMResponse(text="pong", model="x")
 
+    client = FakeClient()
     sess = ChatLLMSession(cfg, provider="ollama")
-    with patch("aegis.llm.chat_session.create_llm_client", return_value=FakeClient()):
+    with patch("aegis.llm.chat_session.create_llm_client", return_value=client):
         await sess.connect(cfg.session)
         await sess.inject_user_text("ping")
         await sess.end()
@@ -399,3 +404,4 @@ async def test_chat_session_flow(monkeypatch: pytest.MonkeyPatch) -> None:
         assert VoiceEventType.USER_TRANSCRIPT in types
         assert VoiceEventType.AGENT_TRANSCRIPT in types
         assert VoiceEventType.ENDED in types
+    assert "untrusted_tool_output" in client.messages[0].content

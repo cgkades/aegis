@@ -42,3 +42,20 @@ async def test_apply_patch(tmp_path: Path) -> None:
     )
     assert not r.is_error
     assert f.read_text(encoding="utf-8") == "foo baz foo"
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_denies_secrets_path_even_when_approved(tmp_path: Path) -> None:
+    tools = ToolsConfig(working_directory=str(tmp_path), sandbox_to_workdir=True)
+    target = tmp_path / ".env"
+    target.write_text("KEY=old\n", encoding="utf-8")
+
+    result = await handle_apply_patch(
+        {"path": str(target), "old": "old", "new": "new"},
+        tools=tools,
+        approved=True,
+    )
+
+    assert result.is_error
+    assert result.decision == "deny"
+    assert target.read_text(encoding="utf-8") == "KEY=old\n"

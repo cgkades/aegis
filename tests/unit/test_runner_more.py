@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -71,6 +72,49 @@ async def test_run_session_once_connect_fail(paths: AegisPaths) -> None:
     ):
         code = await run_session_once(cfg, backend="realtime", paths=paths)
     assert code == 1
+
+
+@pytest.mark.asyncio
+async def test_run_session_once_enforces_connect_timeout(paths: AegisPaths) -> None:
+    cfg = build_config(
+        {
+            "session": {"connect_timeout_s": 1},
+            "activation": {
+                "chime_on_wake": False,
+                "chime_on_connecting": False,
+                "chime_on_end": False,
+            },
+        }
+    )
+
+    class Hangs:
+        ended = False
+
+        async def connect(self, config) -> None:
+            await asyncio.Event().wait()
+
+        async def end(self) -> None:
+            self.ended = True
+
+    session = Hangs()
+    with (
+        patch("aegis.session.runner.sounddevice_available", return_value=False),
+        patch("aegis.session.runner.create_voice_session", return_value=session),
+    ):
+        code = await run_session_once(cfg, backend="custom", paths=paths)
+
+    assert code == 1
+    assert session.ended
+
+
+@pytest.mark.asyncio
+async def test_run_session_once_rejects_text_only_provider(paths: AegisPaths, capsys) -> None:
+    cfg = build_config({"session": {"provider": "ollama"}})
+
+    code = await run_session_once(cfg, backend="ollama", paths=paths)
+
+    assert code == 2
+    assert "text-only provider" in capsys.readouterr().err
 
 
 @pytest.mark.asyncio

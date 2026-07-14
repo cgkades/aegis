@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -40,6 +41,18 @@ def test_openwakeword_start_missing() -> None:
 
             with patch("builtins.__import__", side_effect=fail):
                 eng.start()
+
+
+def test_openwakeword_requires_a_custom_model_for_hey_aegis() -> None:
+    eng = OpenWakeWordEngine()
+    package = ModuleType("openwakeword")
+    model_module = ModuleType("openwakeword.model")
+    model_module.Model = MagicMock()  # type: ignore[attr-defined]
+    with patch.dict(
+        "sys.modules", {"openwakeword": package, "openwakeword.model": model_module}
+    ):
+        with pytest.raises(RuntimeError, match="custom_model_path"):
+            eng.start()
 
 
 def test_openwakeword_process_mocked() -> None:

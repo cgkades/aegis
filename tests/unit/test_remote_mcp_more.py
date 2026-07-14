@@ -6,7 +6,8 @@ from aegis.config import build_config
 from aegis.mcp.remote_spec import _is_private_url, build_remote_mcp_tools
 
 
-def test_connectors() -> None:
+def test_connectors(monkeypatch) -> None:
+    monkeypatch.setenv("MCP_CONNECTOR_TOKEN", "tok")
     cfg = build_config(
         {
             "mcp": {
@@ -17,7 +18,7 @@ def test_connectors() -> None:
                             "connector_id": "connector_googlecalendar",
                             "require_approval": "always",
                             "allowed_tools": ["search_events"],
-                            "authorization": "tok",
+                            "authorization": "env:MCP_CONNECTOR_TOKEN",
                         }
                     ]
                 }
@@ -38,7 +39,8 @@ def test_private_url_helpers() -> None:
     assert not _is_private_url("https://developers.openai.com/mcp")
 
 
-def test_remote_with_headers() -> None:
+def test_remote_with_headers(monkeypatch) -> None:
+    monkeypatch.setenv("MCP_TEST_HEADER", "1")
     cfg = build_config(
         {
             "mcp": {
@@ -47,7 +49,7 @@ def test_remote_with_headers() -> None:
                         {
                             "label": "docs",
                             "server_url": "https://example.com/mcp",
-                            "headers": {"X-Test": "1"},
+                            "headers": {"X-Test": "env:MCP_TEST_HEADER"},
                             "require_approval": "always",
                         }
                     ]

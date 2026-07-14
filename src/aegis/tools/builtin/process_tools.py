@@ -11,6 +11,7 @@ from typing import Any
 from aegis.config.schema import ToolsConfig
 from aegis.tools.policy import evaluate_read_file, gate
 from aegis.tools.types import ToolResult, ToolSpec, err_json
+from aegis.util.secrets import redact_secrets
 
 
 async def handle_list_processes(
@@ -41,7 +42,7 @@ async def handle_list_processes(
     body = lines[1:]
     if pattern:
         body = [ln for ln in body if pattern.lower() in ln.lower()]
-    text = "\n".join([header, *body[:80]])
+    text = redact_secrets("\n".join([header, *body[:80]]))
     return ToolResult(output=text or "(no matches)", risk="read", decision="auto")
 
 
@@ -66,8 +67,17 @@ async def handle_tail_log(
     if not target.is_file():
         return ToolResult(output=err_json("not_a_file", path=path), is_error=True)
     try:
-        # Efficient-ish tail for moderate files
-        data = target.read_bytes()
+        # Read only a bounded suffix. A model-controlled request must not turn a
+        # multi-gigabyte log into a transient in-process allocation.
+        size = target.stat().st_size
+        offset = max(0, size - tools.max_output_bytes)
+        with target.open("rb") as stream:
+            stream.seek(offset)
+            data = stream.read(tools.max_output_bytes)
+        if offset:
+            _, separator, data = data.partition(b"\n")
+            if not separator:
+                data = b""
         text = data.decode("utf-8", errors="replace")
         lines = text.splitlines()[-n:]
         return ToolResult(output="\n".join(lines), risk=policy.risk, decision="auto")

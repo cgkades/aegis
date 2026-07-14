@@ -84,7 +84,9 @@ class RealtimeVoiceSession:
                 },
                 max_size=16 * 1024 * 1024,
             )
-        except Exception:
+        except BaseException:
+            # Cancellation during a slow connect must balance register_open too;
+            # otherwise the idle invariant is left with a phantom cloud session.
             self._gateway.register_close()
             raise
 

@@ -60,12 +60,8 @@ export OPENAI_API_KEY=sk-...
 uv sync --extra audio
 uv run aegis session once --backend realtime
 
-# Local / proxy / cloud chat providers
-uv run aegis session once --backend ollama
-uv run aegis session once --backend litellm
-uv run aegis session once --backend openai_api
-uv run aegis session once --backend azure_openai
-uv run aegis session once --backend bedrock
+# Local / proxy / cloud chat providers are configurable in the Settings UI,
+# but cannot run through the voice-session CLI until cascaded STT/TTS lands.
 ```
 
 ### Azure OpenAI / Foundry
@@ -80,7 +76,7 @@ AZURE_OPENAI_API_KEY=...
 # deployment = "gpt-4o-mini"
 # api_style = "deployments"   # or "openai_v1" / "foundry"
 # api_version = "2024-10-21"
-uv run aegis session once --backend azure_openai
+# Azure OpenAI is currently text-only; it cannot run via `session once` yet.
 ```
 
 ### AWS Bedrock
@@ -95,7 +91,7 @@ export AWS_REGION=us-east-1
 # region = "us-east-1"
 # model_id = "amazon.nova-lite-v1:0"
 # profile = ""   # optional shared-credentials profile name
-uv run aegis session once --backend bedrock
+# Bedrock is currently text-only; it cannot run via `session once` yet.
 ```
 
 ### Always-on daemon

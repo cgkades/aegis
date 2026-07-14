@@ -89,6 +89,16 @@ async def handle_apply_patch(
             risk="write",
             decision="deny",
         )
+    if matches_secrets_globs(
+        str(Path(path).expanduser().resolve()),
+        tools.secrets.path_globs,
+    ):
+        return ToolResult(
+            output='{"error":"secrets_path_write_denied"}',
+            is_error=True,
+            risk="secrets",
+            decision="deny",
+        )
     if not approved:
         return ToolResult(
             output='{"error":"approval_required","reason":"apply_patch"}',

@@ -51,3 +51,8 @@ def test_mask_secret() -> None:
     masked = mask_secret("abcdefghij", visible=4)
     assert masked.endswith("ghij")
     assert set(masked[:-4]) == {"*"}
+
+
+def test_redact_secrets_catches_command_line_flags() -> None:
+    assert "supersecret" not in redact_secrets("cmd --token supersecret")
+    assert "othersecret" not in redact_secrets("cmd --api-key=othersecret")

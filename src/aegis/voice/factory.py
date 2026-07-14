@@ -56,7 +56,7 @@ def create_voice_session(
     }:
         from aegis.llm.chat_session import ChatLLMSession
 
-        return ChatLLMSession(cfg, provider=provider)
+        return ChatLLMSession(cfg, provider=provider, instructions=instructions)
 
     # default: realtime duplex
     if paths is not None:
