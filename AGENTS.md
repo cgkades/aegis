@@ -6,6 +6,7 @@ Guidance for humans and coding agents working in this repository.
 
 - **Name:** Aegis (locked). Wake phrase: “Hey Aegis”.
 - **Design:** [`DESIGN.md`](./DESIGN.md) (approved; implementation spine complete).
+- **Spec (OpenSpec):** [`SPEC.md`](./SPEC.md) index → [`openspec/specs/`](./openspec/specs/) (current behavior) and [`openspec/changes/`](./openspec/changes/) (planned deltas). Prefer editing specs for intent; design stays for architecture.
 - **Platform:** Linux desktop MVP.
 
 ## Non-negotiables

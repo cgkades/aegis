@@ -10,6 +10,9 @@ Say **“Hey Aegis”** (or use a hotkey / CLI) to open a full-duplex voice sess
 
 | Doc | Path |
 | --- | --- |
+| Spec (OpenSpec index) | [`SPEC.md`](./SPEC.md) |
+| OpenSpec capabilities | [`openspec/specs/`](./openspec/specs/) |
+| Planned changes | [`openspec/changes/`](./openspec/changes/) |
 | Design | [`DESIGN.md`](./DESIGN.md) |
 | Architecture | [`docs/architecture.md`](./docs/architecture.md) |
 | Security | [`docs/security.md`](./docs/security.md) |
