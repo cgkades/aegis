@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from aegis.config.schema import AegisConfig, SessionProvider
@@ -52,7 +53,7 @@ class LLMClient(Protocol):
 
 
 class OpenAICompatibleClient:
-    """Chat Completions client for OpenAI / LiteLLM / Ollama / OAuth bearer."""
+    """Chat Completions client for OpenAI / LiteLLM / Ollama / OAuth / Azure."""
 
     def __init__(
         self,
@@ -64,6 +65,9 @@ class OpenAICompatibleClient:
         temperature: float = 0.4,
         max_tokens: int = 2048,
         default_headers: dict[str, str] | None = None,
+        auth_mode: Literal["bearer", "api_key"] = "bearer",
+        extra_query: dict[str, str] | None = None,
+        include_model_in_body: bool = True,
     ) -> None:
         self.provider = provider
         self.model = model
@@ -72,6 +76,9 @@ class OpenAICompatibleClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.default_headers = default_headers or {}
+        self.auth_mode = auth_mode
+        self.extra_query = dict(extra_query or {})
+        self.include_model_in_body = include_model_in_body
 
     async def chat(
         self,
@@ -98,17 +105,23 @@ class OpenAICompatibleClient:
         max_tokens: int | None = None,
     ) -> LLMResponse:
         url = f"{self.base_url}/chat/completions"
-        payload = {
-            "model": self.model,
+        if self.extra_query:
+            url = f"{url}?{urlencode(self.extra_query)}"
+        payload: dict[str, Any] = {
             "messages": [{"role": m.role, "content": m.content} for m in messages],
             "temperature": self.temperature if temperature is None else temperature,
             "max_tokens": self.max_tokens if max_tokens is None else max_tokens,
         }
+        if self.include_model_in_body:
+            payload["model"] = self.model
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
             **self.default_headers,
         }
+        if self.auth_mode == "api_key":
+            headers["api-key"] = self.api_key
+        else:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         req = Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
@@ -204,6 +217,38 @@ def create_llm_client(cfg: AegisConfig, *, provider: str | None = None) -> LLMCl
             api_key=tokens.access_token,
             temperature=temp,
             max_tokens=max_tok,
+        )
+
+    if prov in {SessionProvider.AZURE_OPENAI.value, "azure_openai", "azure"}:
+        from aegis.llm.azure import create_azure_client
+
+        model = _chat_model(cfg.session.model, llm.azure_openai.deployment)
+        return create_azure_client(
+            llm.azure_openai,
+            model=model,
+            temperature=temp,
+            max_tokens=max_tok,
+        )
+
+    if prov in {SessionProvider.BEDROCK.value, "bedrock", "aws_bedrock"}:
+        from aegis.llm.bedrock import BedrockConverseClient, resolve_aws_credentials
+
+        model = _chat_model(cfg.session.model, llm.bedrock.model_id)
+        creds, region = resolve_aws_credentials(
+            access_key_env=llm.bedrock.access_key_env,
+            secret_key_env=llm.bedrock.secret_key_env,
+            session_token_env=llm.bedrock.session_token_env,
+            region_env=llm.bedrock.region_env,
+            profile=llm.bedrock.profile,
+            default_region=llm.bedrock.region,
+        )
+        return BedrockConverseClient(
+            model_id=model,
+            region=region,
+            credentials=creds,
+            temperature=temp,
+            max_tokens=max_tok,
+            endpoint_url=llm.bedrock.endpoint_url,
         )
 
     # openai_api, realtime (chat helper), text_fallback, default

@@ -115,6 +115,8 @@ def session_group() -> None:
             "chatgpt_oauth",
             "litellm",
             "ollama",
+            "azure_openai",
+            "bedrock",
             "mock",
             "gpt_live",
             "text_fallback",

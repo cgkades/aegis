@@ -54,6 +54,16 @@ def _settings_dict(cfg) -> dict[str, Any]:
         "ollama_native_base_url": cfg.llm.ollama.native_base_url,
         "ollama_model": cfg.llm.ollama.model,
         "chatgpt_token_path": cfg.llm.chatgpt_oauth.token_path,
+        "azure_endpoint": cfg.llm.azure_openai.endpoint,
+        "azure_api_key_env": cfg.llm.azure_openai.api_key_env,
+        "azure_api_version": cfg.llm.azure_openai.api_version,
+        "azure_deployment": cfg.llm.azure_openai.deployment,
+        "azure_api_style": cfg.llm.azure_openai.api_style,
+        "azure_auth_mode": cfg.llm.azure_openai.auth_mode,
+        "bedrock_region": cfg.llm.bedrock.region,
+        "bedrock_model_id": cfg.llm.bedrock.model_id,
+        "bedrock_profile": cfg.llm.bedrock.profile,
+        "bedrock_endpoint_url": cfg.llm.bedrock.endpoint_url,
     }
 
 
@@ -78,6 +88,12 @@ def _full_settings_payload() -> dict[str, Any]:
                 "OPENAI_API_KEY",
                 "LITELLM_API_KEY",
                 "OLLAMA_API_KEY",
+                "AZURE_OPENAI_API_KEY",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
+                "AWS_REGION",
+                "AWS_PROFILE",
                 "PICOVOICE_ACCESS_KEY",
                 "OPENAI_REALTIME_URL",
                 "AEGIS_PROFILE",
@@ -204,6 +220,16 @@ class SettingsHandler(BaseHTTPRequestHandler):
                     chatgpt_token_path=body.get("chatgpt_token_path"),
                     temperature=body.get("temperature"),
                     max_tokens=body.get("max_tokens"),
+                    azure_endpoint=body.get("azure_endpoint"),
+                    azure_api_key_env=body.get("azure_api_key_env"),
+                    azure_api_version=body.get("azure_api_version"),
+                    azure_deployment=body.get("azure_deployment"),
+                    azure_api_style=body.get("azure_api_style"),
+                    azure_auth_mode=body.get("azure_auth_mode"),
+                    bedrock_region=body.get("bedrock_region"),
+                    bedrock_model_id=body.get("bedrock_model_id"),
+                    bedrock_profile=body.get("bedrock_profile"),
+                    bedrock_endpoint_url=body.get("bedrock_endpoint_url"),
                 )
                 save_config(updated, paths.config_file)
                 payload = _full_settings_payload()

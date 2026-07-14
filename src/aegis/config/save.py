@@ -111,6 +111,18 @@ def apply_llm_settings(
     chatgpt_token_path: str | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    # Azure OpenAI / Foundry
+    azure_endpoint: str | None = None,
+    azure_api_key_env: str | None = None,
+    azure_api_version: str | None = None,
+    azure_deployment: str | None = None,
+    azure_api_style: str | None = None,
+    azure_auth_mode: str | None = None,
+    # AWS Bedrock
+    bedrock_region: str | None = None,
+    bedrock_model_id: str | None = None,
+    bedrock_profile: str | None = None,
+    bedrock_endpoint_url: str | None = None,
 ) -> AegisConfig:
     """Return a copy of cfg with LLM-related fields updated."""
     data = cfg.model_dump(mode="json")
@@ -160,4 +172,29 @@ def apply_llm_settings(
         data["llm"]["temperature"] = float(temperature)
     if max_tokens is not None:
         data["llm"]["max_tokens"] = int(max_tokens)
+    if azure_endpoint is not None:
+        data["llm"]["azure_openai"]["endpoint"] = azure_endpoint
+    if azure_api_key_env is not None:
+        data["llm"]["azure_openai"]["api_key_env"] = azure_api_key_env
+    if azure_api_version is not None:
+        data["llm"]["azure_openai"]["api_version"] = azure_api_version
+    if azure_deployment is not None:
+        data["llm"]["azure_openai"]["deployment"] = azure_deployment
+        # Keep session.model aligned when saving Azure deployment
+        if model is None:
+            data["session"]["model"] = azure_deployment
+    if azure_api_style is not None:
+        data["llm"]["azure_openai"]["api_style"] = azure_api_style
+    if azure_auth_mode is not None:
+        data["llm"]["azure_openai"]["auth_mode"] = azure_auth_mode
+    if bedrock_region is not None:
+        data["llm"]["bedrock"]["region"] = bedrock_region
+    if bedrock_model_id is not None:
+        data["llm"]["bedrock"]["model_id"] = bedrock_model_id
+        if model is None:
+            data["session"]["model"] = bedrock_model_id
+    if bedrock_profile is not None:
+        data["llm"]["bedrock"]["profile"] = bedrock_profile
+    if bedrock_endpoint_url is not None:
+        data["llm"]["bedrock"]["endpoint_url"] = bedrock_endpoint_url
     return AegisConfig.model_validate(data)

@@ -33,12 +33,17 @@ cp .env.example .env   # then edit OPENAI_API_KEY= / LiteLLM keys as needed
 uv run aegis settings  # http://127.0.0.1:8765
 
 # Providers (Settings UI or --backend):
-#   realtime       — OpenAI Realtime duplex (API key)
+#   realtime       — OpenAI Realtime duplex (API key) — full voice
 #   openai_api     — OpenAI Chat Completions (API key)
 #   chatgpt_oauth  — Sign in with ChatGPT (device code / paste token)
+#   azure_openai   — Azure OpenAI deployments or Azure AI Foundry
+#   bedrock        — AWS Bedrock Runtime Converse (SigV4)
 #   litellm        — LiteLLM OpenAI-compatible proxy
 #   ollama         — local Ollama models
 #   mock           — offline dogfood
+#
+# Chat providers (everything except realtime) are text/tools today;
+# cascaded STT/TTS for voice is a follow-up.
 
 uv run aegis auth login          # ChatGPT OAuth
 uv run aegis auth status
@@ -52,10 +57,42 @@ export OPENAI_API_KEY=sk-...
 uv sync --extra audio
 uv run aegis session once --backend realtime
 
-# Local / proxy chat providers
+# Local / proxy / cloud chat providers
 uv run aegis session once --backend ollama
 uv run aegis session once --backend litellm
 uv run aegis session once --backend openai_api
+uv run aegis session once --backend azure_openai
+uv run aegis session once --backend bedrock
+```
+
+### Azure OpenAI / Foundry
+
+```bash
+# .env
+AZURE_OPENAI_API_KEY=...
+
+# config.toml (or Settings UI)
+# [llm.azure_openai]
+# endpoint = "https://my-resource.openai.azure.com"
+# deployment = "gpt-4o-mini"
+# api_style = "deployments"   # or "openai_v1" / "foundry"
+# api_version = "2024-10-21"
+uv run aegis session once --backend azure_openai
+```
+
+### AWS Bedrock
+
+```bash
+# credentials via env or ~/.aws/credentials profile
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_REGION=us-east-1
+
+# [llm.bedrock]
+# region = "us-east-1"
+# model_id = "amazon.nova-lite-v1:0"
+# profile = ""   # optional shared-credentials profile name
+uv run aegis session once --backend bedrock
 ```
 
 ### Always-on daemon

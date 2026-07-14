@@ -64,6 +64,33 @@ def list_provider_catalog() -> list[dict[str, Any]]:
             "models": [],  # dynamic from /api/tags
         },
         {
+            "id": "azure_openai",
+            "name": "Azure OpenAI / Foundry",
+            "kind": "chat",
+            "needs": ["AZURE_OPENAI_API_KEY", "endpoint"],
+            "description": (
+                "Azure OpenAI deployments or Azure AI Foundry model endpoints "
+                "(api-key or Entra bearer)."
+            ),
+            "models": ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"],
+        },
+        {
+            "id": "bedrock",
+            "name": "AWS Bedrock",
+            "kind": "chat",
+            "needs": ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
+            "description": (
+                "Amazon Bedrock Runtime Converse API (SigV4). "
+                "Uses env credentials or ~/.aws profile — no boto3 required."
+            ),
+            "models": [
+                "amazon.nova-lite-v1:0",
+                "amazon.nova-pro-v1:0",
+                "anthropic.claude-3-5-sonnet-20241022-v2:0",
+                "anthropic.claude-3-haiku-20240307-v1:0",
+            ],
+        },
+        {
             "id": "mock",
             "name": "Mock (offline)",
             "kind": "dev",
@@ -191,6 +218,81 @@ def probe_provider(cfg: AegisConfig, provider: str) -> dict[str, Any]:
             if models
             else "API key present (model list unavailable)"
         )
+        return result
+
+    if provider in {"azure_openai", "azure"}:
+        az = cfg.llm.azure_openai
+        key = resolve_api_key(env_var=az.api_key_env)
+        if not az.endpoint:
+            result["detail"] = "llm.azure_openai.endpoint not set"
+            return result
+        if not key:
+            result["detail"] = f"{az.api_key_env} not set"
+            return result
+        result["ok"] = True
+        result["detail"] = (
+            f"Azure endpoint configured ({az.api_style}, deployment={az.deployment})"
+        )
+        result["models"] = [az.deployment] if az.deployment else []
+        result["models"].extend(
+            [
+                "gpt-4o-mini",
+                "gpt-4o",
+                "gpt-4.1-mini",
+                "gpt-4.1",
+                "o4-mini",
+            ]
+        )
+        # de-dupe preserve order
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for m in result["models"]:
+            if m and m not in seen:
+                seen.add(m)
+                uniq.append(m)
+        result["models"] = uniq
+        return result
+
+    if provider in {"bedrock", "aws_bedrock"}:
+        from aegis.llm.bedrock import resolve_aws_credentials
+
+        br = cfg.llm.bedrock
+        try:
+            _creds, region = resolve_aws_credentials(
+                access_key_env=br.access_key_env,
+                secret_key_env=br.secret_key_env,
+                session_token_env=br.session_token_env,
+                region_env=br.region_env,
+                profile=br.profile,
+                default_region=br.region,
+            )
+        except RuntimeError as exc:
+            result["detail"] = str(exc)
+            result["models"] = [
+                br.model_id,
+                "amazon.nova-lite-v1:0",
+                "amazon.nova-pro-v1:0",
+                "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            ]
+            return result
+        result["ok"] = True
+        result["detail"] = f"AWS credentials present (region={region})"
+        result["models"] = [
+            br.model_id,
+            "amazon.nova-lite-v1:0",
+            "amazon.nova-pro-v1:0",
+            "amazon.nova-micro-v1:0",
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "anthropic.claude-3-haiku-20240307-v1:0",
+            "meta.llama3-8b-instruct-v1:0",
+        ]
+        seen = set()
+        uniq = []
+        for m in result["models"]:
+            if m and m not in seen:
+                seen.add(m)
+                uniq.append(m)
+        result["models"] = uniq
         return result
 
     result["detail"] = f"unknown provider {provider}"

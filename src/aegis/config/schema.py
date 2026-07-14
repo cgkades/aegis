@@ -28,6 +28,8 @@ class SessionProvider(StrEnum):
     - chatgpt_oauth: ChatGPT account OAuth tokens (subscription path; chat + tools)
     - litellm: OpenAI-compatible LiteLLM proxy
     - ollama: local Ollama OpenAI-compatible API
+    - azure_openai: Azure OpenAI / Azure AI Foundry (api-key or Entra bearer)
+    - bedrock: AWS Bedrock Runtime Converse API (SigV4)
     - mock / gpt_live / text_fallback: dev / stubs
     """
 
@@ -36,6 +38,8 @@ class SessionProvider(StrEnum):
     CHATGPT_OAUTH = "chatgpt_oauth"
     LITELLM = "litellm"
     OLLAMA = "ollama"
+    AZURE_OPENAI = "azure_openai"
+    BEDROCK = "bedrock"
     GPT_LIVE = "gpt_live"
     TEXT_FALLBACK = "text_fallback"
     HYBRID_TEXT_TOOLS = "hybrid_text_tools"
@@ -215,6 +219,45 @@ class OllamaConfig(BaseModel):
     model: str = "llama3.2"
 
 
+class AzureOpenAIConfig(BaseModel):
+    """Azure OpenAI or Azure AI Foundry chat endpoints.
+
+    api_style:
+      - deployments: classic Azure OpenAI
+        {endpoint}/openai/deployments/{deployment}/chat/completions?api-version=…
+      - openai_v1: OpenAI-compatible path on Azure
+        {endpoint}/openai/v1/chat/completions
+      - foundry: Azure AI Foundry model inference
+        {endpoint}/models/chat/completions?api-version=…
+    """
+
+    endpoint: str = ""
+    api_key_env: str = "AZURE_OPENAI_API_KEY"
+    api_version: str = "2024-10-21"
+    # Deployment name (Azure OpenAI) or model id (Foundry)
+    deployment: str = "gpt-4o-mini"
+    api_style: Literal["deployments", "openai_v1", "foundry"] = "deployments"
+    # bearer = Authorization: Bearer (Entra token); api_key = api-key header
+    auth_mode: Literal["api_key", "bearer"] = "api_key"
+
+
+class BedrockConfig(BaseModel):
+    """AWS Bedrock Runtime Converse API (SigV4, no boto3 required)."""
+
+    region: str = "us-east-1"
+    # Model or inference profile id, e.g. amazon.nova-lite-v1:0
+    model_id: str = "amazon.nova-lite-v1:0"
+    # Credential env var names (standard AWS names by default)
+    access_key_env: str = "AWS_ACCESS_KEY_ID"
+    secret_key_env: str = "AWS_SECRET_ACCESS_KEY"
+    session_token_env: str = "AWS_SESSION_TOKEN"
+    region_env: str = "AWS_REGION"
+    # Optional shared-credentials profile (~/.aws/credentials)
+    profile: str = ""
+    # Optional override of runtime endpoint host prefix
+    endpoint_url: str = ""
+
+
 class LLMConfig(BaseModel):
     """Multi-provider LLM settings used by settings UI and chat clients."""
 
@@ -227,6 +270,8 @@ class LLMConfig(BaseModel):
     chatgpt_oauth: ChatGptOAuthConfig = Field(default_factory=ChatGptOAuthConfig)
     litellm: LiteLLMConfig = Field(default_factory=LiteLLMConfig)
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
+    azure_openai: AzureOpenAIConfig = Field(default_factory=AzureOpenAIConfig)
+    bedrock: BedrockConfig = Field(default_factory=BedrockConfig)
 
 
 class ShellRule(BaseModel):

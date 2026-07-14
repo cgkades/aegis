@@ -55,6 +55,10 @@ def create_voice_session(
         "litellm",
         "chatgpt_oauth",
         "openai_api",
+        "azure_openai",
+        "azure",
+        "bedrock",
+        "aws_bedrock",
         "hybrid_text_tools",
     }:
         from aegis.llm.chat_session import ChatLLMSession
@@ -98,12 +102,16 @@ def provider_status(cfg: AegisConfig) -> dict[str, Any]:
         "litellm": probe_provider(cfg, "litellm"),
         "gpt_live_available": False,
         "text_fallback_available": True,
+        "azure_openai": probe_provider(cfg, "azure_openai"),
+        "bedrock": probe_provider(cfg, "bedrock"),
         "providers": [
             SessionProvider.REALTIME.value,
             SessionProvider.OPENAI_API.value,
             SessionProvider.CHATGPT_OAUTH.value,
             SessionProvider.LITELLM.value,
             SessionProvider.OLLAMA.value,
+            SessionProvider.AZURE_OPENAI.value,
+            SessionProvider.BEDROCK.value,
             SessionProvider.MOCK.value,
         ],
     }

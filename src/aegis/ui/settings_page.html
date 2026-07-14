@@ -84,7 +84,7 @@
 <body>
   <header>
     <h1>Aegis settings</h1>
-    <p>Configure LLM backends: OpenAI API / Realtime, ChatGPT OAuth, LiteLLM, or Ollama.</p>
+    <p>Configure LLM backends: OpenAI, ChatGPT OAuth, Azure OpenAI/Foundry, AWS Bedrock, LiteLLM, or Ollama.</p>
   </header>
   <main>
     <section class="card">
@@ -111,6 +111,8 @@
             <option value="realtime">OpenAI Realtime (API key)</option>
             <option value="openai_api">OpenAI Chat API (API key)</option>
             <option value="chatgpt_oauth">ChatGPT account (OAuth)</option>
+            <option value="azure_openai">Azure OpenAI / Foundry</option>
+            <option value="bedrock">AWS Bedrock</option>
             <option value="litellm">LiteLLM proxy</option>
             <option value="ollama">Ollama (local)</option>
             <option value="mock">Mock (offline)</option>
@@ -208,6 +210,43 @@
             <label>Default Ollama model<input id="ollama_model" placeholder="llama3.2" /></label>
           </div>
         </div>
+
+        <!-- Azure OpenAI / Foundry -->
+        <div class="provider-panel full" id="panel-azure" style="grid-column:1/-1">
+          <p class="hint">Azure OpenAI (deployments) or Azure AI Foundry model inference. Key via <code>AZURE_OPENAI_API_KEY</code>.</p>
+          <div class="grid">
+            <label class="full">Endpoint<input id="azure_endpoint" placeholder="https://my-resource.openai.azure.com" /></label>
+            <label>API key env<input id="azure_api_key_env" placeholder="AZURE_OPENAI_API_KEY" /></label>
+            <label>API version<input id="azure_api_version" placeholder="2024-10-21" /></label>
+            <label>Deployment / model<input id="azure_deployment" placeholder="gpt-4o-mini" /></label>
+            <label>
+              API style
+              <select id="azure_api_style">
+                <option value="deployments">deployments (classic Azure OpenAI)</option>
+                <option value="openai_v1">openai_v1</option>
+                <option value="foundry">foundry (Azure AI Foundry)</option>
+              </select>
+            </label>
+            <label>
+              Auth mode
+              <select id="azure_auth_mode">
+                <option value="api_key">api-key header</option>
+                <option value="bearer">Bearer (Entra token)</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <!-- AWS Bedrock -->
+        <div class="provider-panel full" id="panel-bedrock" style="grid-column:1/-1">
+          <p class="hint">Bedrock Runtime Converse API (SigV4). Uses <code>AWS_ACCESS_KEY_ID</code> / secret, optional session token, or a shared credentials profile.</p>
+          <div class="grid">
+            <label>Region<input id="bedrock_region" placeholder="us-east-1" /></label>
+            <label>Model / inference profile id<input id="bedrock_model_id" placeholder="amazon.nova-lite-v1:0" /></label>
+            <label>AWS profile (optional)<input id="bedrock_profile" placeholder="default" /></label>
+            <label class="full">Endpoint override (optional)<input id="bedrock_endpoint_url" placeholder="https://bedrock-runtime.us-east-1.amazonaws.com" /></label>
+          </div>
+        </div>
       </form>
 
       <div class="row">
@@ -225,6 +264,12 @@
       <div class="secret-box">
         <select id="env_key_name">
           <option>OPENAI_API_KEY</option>
+          <option>AZURE_OPENAI_API_KEY</option>
+          <option>AWS_ACCESS_KEY_ID</option>
+          <option>AWS_SECRET_ACCESS_KEY</option>
+          <option>AWS_SESSION_TOKEN</option>
+          <option>AWS_REGION</option>
+          <option>AWS_PROFILE</option>
           <option>LITELLM_API_KEY</option>
           <option>OLLAMA_API_KEY</option>
           <option>PICOVOICE_ACCESS_KEY</option>
@@ -261,13 +306,15 @@
     }
 
     function showPanel(provider) {
-      for (const id of ["panel-openai", "panel-oauth", "panel-litellm", "panel-ollama"]) {
+      for (const id of ["panel-openai", "panel-oauth", "panel-litellm", "panel-ollama", "panel-azure", "panel-bedrock"]) {
         $(id).classList.remove("active");
       }
       if (provider === "realtime" || provider === "openai_api") $("panel-openai").classList.add("active");
       if (provider === "chatgpt_oauth") $("panel-oauth").classList.add("active");
       if (provider === "litellm") $("panel-litellm").classList.add("active");
       if (provider === "ollama") $("panel-ollama").classList.add("active");
+      if (provider === "azure_openai" || provider === "azure") $("panel-azure").classList.add("active");
+      if (provider === "bedrock" || provider === "aws_bedrock") $("panel-bedrock").classList.add("active");
       document.querySelectorAll(".catalog-item").forEach((el) => {
         el.classList.toggle("active", el.dataset.id === provider);
       });
@@ -305,6 +352,16 @@
       $("ollama_native_base_url").value = s.ollama_native_base_url || "";
       $("ollama_model").value = s.ollama_model || "";
       $("chatgpt_token_path").value = s.chatgpt_token_path || "";
+      $("azure_endpoint").value = s.azure_endpoint || "";
+      $("azure_api_key_env").value = s.azure_api_key_env || "AZURE_OPENAI_API_KEY";
+      $("azure_api_version").value = s.azure_api_version || "2024-10-21";
+      $("azure_deployment").value = s.azure_deployment || "";
+      $("azure_api_style").value = s.azure_api_style || "deployments";
+      $("azure_auth_mode").value = s.azure_auth_mode || "api_key";
+      $("bedrock_region").value = s.bedrock_region || "us-east-1";
+      $("bedrock_model_id").value = s.bedrock_model_id || "";
+      $("bedrock_profile").value = s.bedrock_profile || "";
+      $("bedrock_endpoint_url").value = s.bedrock_endpoint_url || "";
       showPanel($("provider").value);
     }
 
@@ -331,6 +388,16 @@
         ollama_native_base_url: $("ollama_native_base_url").value.trim(),
         ollama_model: $("ollama_model").value.trim(),
         chatgpt_token_path: $("chatgpt_token_path").value.trim(),
+        azure_endpoint: $("azure_endpoint").value.trim(),
+        azure_api_key_env: $("azure_api_key_env").value.trim(),
+        azure_api_version: $("azure_api_version").value.trim(),
+        azure_deployment: $("azure_deployment").value.trim(),
+        azure_api_style: $("azure_api_style").value,
+        azure_auth_mode: $("azure_auth_mode").value,
+        bedrock_region: $("bedrock_region").value.trim(),
+        bedrock_model_id: $("bedrock_model_id").value.trim(),
+        bedrock_profile: $("bedrock_profile").value.trim(),
+        bedrock_endpoint_url: $("bedrock_endpoint_url").value.trim(),
       };
     }
 
