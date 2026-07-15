@@ -42,10 +42,16 @@ class IpcResponse:
 
 def parse_request(line: str) -> IpcRequest:
     data = json.loads(line)
+    params = data.get("params") if isinstance(data.get("params"), dict) else {}
+    # Early approval clients sent their fields at the top level. Preserve that
+    # wire form while normalizing all handlers onto ``params``.
+    for key in ("call_id", "allow", "allowed", "scope", "grant_scope", "reason"):
+        if key in data and key not in params:
+            params[key] = data[key]
     return IpcRequest(
         op=str(data.get("op", "")),
         id=str(data.get("id", "1")),
-        params=data.get("params") if isinstance(data.get("params"), dict) else {},
+        params=params,
     )
 
 

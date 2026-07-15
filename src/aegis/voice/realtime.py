@@ -7,6 +7,7 @@ import base64
 import json
 import os
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlencode
 
@@ -24,6 +25,20 @@ from aegis.voice.protocol import (
 )
 
 log = get_logger("voice.realtime")
+
+# Bound event queue so a stalled consumer (approval / long tools) cannot grow RSS.
+# Audio may be evicted to preserve control events; control events apply transport
+# backpressure rather than silently disappearing.
+_EVENT_QUEUE_MAX = 256
+_MAX_FUNCTION_ARG_BYTES = 512_000
+_MAX_FUNCTION_ARG_CALLS = 8
+_MAX_FUNCTION_ARG_TOTAL_BYTES = 1_000_000
+
+
+@dataclass(slots=True)
+class _FunctionArgBuffer:
+    chunks: list[str] = field(default_factory=list)
+    size_bytes: int = 0
 
 DEFAULT_INSTRUCTIONS = (
     "You are Aegis, a local-first ops pair for a Linux workstation. "
@@ -56,11 +71,17 @@ class RealtimeVoiceSession:
         self._tools = tools or []
         self._instructions = instructions or DEFAULT_INSTRUCTIONS
         self._ws: ClientConnection | None = None
-        self._events: asyncio.Queue[VoiceEvent | None] = asyncio.Queue()
+        self._events: asyncio.Queue[VoiceEvent | None] = asyncio.Queue(
+            maxsize=_EVENT_QUEUE_MAX
+        )
         self._recv_task: asyncio.Task[None] | None = None
         self._connected = False
         self._config: SessionConfig | None = None
-        self._function_arg_buffers: dict[str, str] = {}
+        # Chunks avoid repeated string concatenation; byte counters keep delta
+        # handling O(1) and cap total uncompleted-call memory.
+        self._function_arg_buffers: dict[str, _FunctionArgBuffer] = {}
+        self._function_arg_overflows: set[str] = set()
+        self._function_arg_total_bytes = 0
         self._usage = UsageSnapshot()
 
     async def connect(self, config: SessionConfig) -> None:
@@ -159,26 +180,37 @@ class RealtimeVoiceSession:
     async def end(self) -> None:
         if not self._connected:
             return
+        # Mark disconnected first so concurrent callers are no-ops. Gateway
+        # accounting must run in finally: on Python 3.11+ sticky CancelledError
+        # can re-raise after awaits, and register_close must not be skipped.
         self._connected = False
-        if self._recv_task is not None:
-            self._recv_task.cancel()
-            try:
-                await self._recv_task
-            except asyncio.CancelledError:
-                pass
-            self._recv_task = None
-        if self._ws is not None:
-            try:
-                await self._ws.close()
-            except Exception as exc:
-                log.debug("ws close: %s", exc)
-            self._ws = None
-        await self._events.put(
-            VoiceEvent(type=VoiceEventType.USAGE, usage=self._usage)
-        )
-        await self._events.put(VoiceEvent(type=VoiceEventType.ENDED))
-        await self._events.put(None)
-        self._gateway.register_close()
+        try:
+            if self._recv_task is not None:
+                self._recv_task.cancel()
+                try:
+                    await self._recv_task
+                except asyncio.CancelledError:
+                    pass
+                self._recv_task = None
+            if self._ws is not None:
+                try:
+                    await self._ws.close()
+                except Exception as exc:
+                    log.debug("ws close: %s", exc)
+                self._ws = None
+            # Best-effort terminal events; do not let cancel skip register_close.
+            for event in (
+                VoiceEvent(type=VoiceEventType.USAGE, usage=self._usage),
+                VoiceEvent(type=VoiceEventType.ENDED),
+                None,
+            ):
+                if not self._put_event_nowait(event):
+                    log.warning(
+                        "terminal realtime event deferred: queue contains only control events"
+                    )
+        finally:
+            self._clear_function_arg_buffers()
+            self._gateway.register_close()
 
     async def events(self) -> AsyncIterator[VoiceEvent]:
         while True:
@@ -190,6 +222,36 @@ class RealtimeVoiceSession:
     async def _send(self, payload: dict[str, Any]) -> None:
         assert self._ws is not None
         await self._ws.send(json.dumps(payload))
+
+    def _drop_oldest_audio(self) -> bool:
+        """Evict one queued audio event without disturbing protocol control events."""
+        queue = self._events._queue  # asyncio.Queue deque; all access is on this loop.
+        for index, item in enumerate(queue):
+            if item is not None and item.type is VoiceEventType.AGENT_AUDIO:
+                del queue[index]
+                return True
+        return False
+
+    def _put_event_nowait(self, event: VoiceEvent | None) -> bool:
+        """Enqueue without dropping control events; return False if they fill the queue."""
+        try:
+            self._events.put_nowait(event)
+            return True
+        except asyncio.QueueFull:
+            if not self._drop_oldest_audio():
+                return False
+        self._events.put_nowait(event)
+        return True
+
+    async def _put_event(self, event: VoiceEvent | None) -> None:
+        """Put an event, evicting only audio or backpressuring control events."""
+        if event is not None and event.type is VoiceEventType.AGENT_AUDIO:
+            if not self._put_event_nowait(event):
+                log.debug("dropping agent audio (event queue full)")
+            return
+        if not self._put_event_nowait(event):
+            log.warning("realtime control queue full; applying transport backpressure")
+            await self._events.put(event)
 
     async def _recv_loop(self) -> None:
         assert self._ws is not None
@@ -207,18 +269,19 @@ class RealtimeVoiceSession:
             raise
         except Exception as exc:
             log.error("realtime recv error: %s", exc)
-            await self._events.put(
+            await self._put_event(
                 VoiceEvent(type=VoiceEventType.ERROR, message=str(exc))
             )
         finally:
+            self._clear_function_arg_buffers()
             if self._connected:
                 # Unexpected close
                 self._connected = False
-                await self._events.put(
+                await self._put_event(
                     VoiceEvent(type=VoiceEventType.ERROR, message="connection closed")
                 )
-                await self._events.put(VoiceEvent(type=VoiceEventType.ENDED))
-                await self._events.put(None)
+                await self._put_event(VoiceEvent(type=VoiceEventType.ENDED))
+                await self._put_event(None)
                 try:
                     self._gateway.register_close()
                 except Exception:
@@ -228,7 +291,7 @@ class RealtimeVoiceSession:
         etype = msg.get("type", "")
 
         if etype in {"session.created", "session.updated"}:
-            await self._events.put(VoiceEvent(type=VoiceEventType.READY, extra=msg))
+            await self._put_event(VoiceEvent(type=VoiceEventType.READY, extra=msg))
             return
 
         if etype in {
@@ -241,7 +304,7 @@ class RealtimeVoiceSession:
                     pcm = base64.b64decode(b64)
                 except Exception:
                     return
-                await self._events.put(
+                await self._put_event(
                     VoiceEvent(type=VoiceEventType.AGENT_AUDIO, pcm16=pcm)
                 )
             return
@@ -252,7 +315,7 @@ class RealtimeVoiceSession:
         }:
             text = msg.get("delta") or ""
             if text:
-                await self._events.put(
+                await self._put_event(
                     VoiceEvent(type=VoiceEventType.AGENT_TRANSCRIPT, text=text)
                 )
             return
@@ -263,11 +326,11 @@ class RealtimeVoiceSession:
         }:
             text = msg.get("transcript") or msg.get("text") or ""
             if text and "input_audio" in etype:
-                await self._events.put(
+                await self._put_event(
                     VoiceEvent(type=VoiceEventType.USER_TRANSCRIPT, text=text)
                 )
             elif text:
-                await self._events.put(
+                await self._put_event(
                     VoiceEvent(type=VoiceEventType.AGENT_TRANSCRIPT, text=text)
                 )
             return
@@ -275,21 +338,61 @@ class RealtimeVoiceSession:
         if etype == "response.function_call_arguments.delta":
             call_id = msg.get("call_id") or msg.get("item_id") or ""
             delta = msg.get("delta") or ""
-            if call_id:
-                self._function_arg_buffers[call_id] = (
-                    self._function_arg_buffers.get(call_id, "") + delta
-                )
+            if call_id and delta:
+                if call_id in self._function_arg_overflows:
+                    return
+                delta_bytes = len(delta.encode("utf-8", errors="replace"))
+                buffer = self._function_arg_buffers.get(call_id)
+                if buffer is None:
+                    if len(self._function_arg_buffers) >= _MAX_FUNCTION_ARG_CALLS:
+                        self._function_arg_overflows.add(call_id)
+                        log.warning("too many concurrent function argument streams")
+                        return
+                    buffer = _FunctionArgBuffer()
+                    self._function_arg_buffers[call_id] = buffer
+                if (
+                    buffer.size_bytes + delta_bytes > _MAX_FUNCTION_ARG_BYTES
+                    or self._function_arg_total_bytes + delta_bytes
+                    > _MAX_FUNCTION_ARG_TOTAL_BYTES
+                ):
+                    log.warning(
+                        "function argument budget exceeded for call_id=%s", call_id
+                    )
+                    self._function_arg_total_bytes -= buffer.size_bytes
+                    self._function_arg_buffers.pop(call_id, None)
+                    self._function_arg_overflows.add(call_id)
+                    return
+                buffer.chunks.append(delta)
+                buffer.size_bytes += delta_bytes
+                self._function_arg_total_bytes += delta_bytes
             return
 
         if etype == "response.function_call_arguments.done":
             call_id = msg.get("call_id") or ""
             name = msg.get("name") or ""
-            raw_args = msg.get("arguments") or self._function_arg_buffers.pop(call_id, "{}")
-            try:
-                arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-            except json.JSONDecodeError:
-                arguments = {"_raw": raw_args}
-            await self._events.put(
+            buffer = self._function_arg_buffers.pop(call_id, None)
+            if buffer is not None:
+                self._function_arg_total_bytes -= buffer.size_bytes
+            overflowed = call_id in self._function_arg_overflows
+            self._function_arg_overflows.discard(call_id)
+            raw_args = msg.get("arguments")
+            if raw_args is None or raw_args == "":
+                raw_args = "".join(buffer.chunks) if buffer else "{}"
+            if isinstance(raw_args, str) and len(
+                raw_args.encode("utf-8", errors="replace")
+            ) > _MAX_FUNCTION_ARG_BYTES:
+                overflowed = True
+            if overflowed:
+                # Never invoke a local tool with an incomplete argument object.
+                # An unknown-tool result still resolves the remote call safely.
+                name = ""
+                arguments: object = {}
+            else:
+                try:
+                    arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                except json.JSONDecodeError:
+                    arguments = {"_raw": raw_args}
+            await self._put_event(
                 VoiceEvent(
                     type=VoiceEventType.TOOL_CALL,
                     tool_call=ToolCallRequest(
@@ -305,26 +408,32 @@ class RealtimeVoiceSession:
             usage = _usage_from_response(msg)
             if usage is not None:
                 self._usage = self._usage.merge(usage)
-                await self._events.put(VoiceEvent(type=VoiceEventType.USAGE, usage=usage))
+                await self._put_event(VoiceEvent(type=VoiceEventType.USAGE, usage=usage))
+            self._clear_function_arg_buffers()
             return
 
         if etype == "error":
             err = msg.get("error") or {}
             message = err.get("message") if isinstance(err, dict) else str(err)
-            await self._events.put(
+            await self._put_event(
                 VoiceEvent(type=VoiceEventType.ERROR, message=message or "realtime error")
             )
             return
 
         # MCP / other — surface as remote activity when recognizable
         if "mcp" in etype:
-            await self._events.put(
+            await self._put_event(
                 VoiceEvent(
                     type=VoiceEventType.REMOTE_TOOL_ACTIVITY,
                     message=etype,
                     extra=msg,
                 )
             )
+
+    def _clear_function_arg_buffers(self) -> None:
+        self._function_arg_buffers.clear()
+        self._function_arg_overflows.clear()
+        self._function_arg_total_bytes = 0
 
 
 def _usage_from_response(msg: dict[str, Any]) -> UsageSnapshot | None:

@@ -582,7 +582,10 @@ aegis audit tail [--session ID]
 ~/.local/state/aegis/aegis.sock   # mode 0600, user-owned
 ```
 
-JSON-lines: `{"op":"session.start"}`, `{"op":"session.end"}`, `{"op":"status"}`, `{"op":"approval.respond","id":"...","allow":true,"scope":"once|tool|risk_class|session"}`.
+JSON-lines: `{"op":"session.start"}`, `{"op":"session.end"}`, `{"op":"status"}`, and
+`{"op":"approval.respond","params":{"call_id":"...","allowed":true,"grant_scope":"once|same_tool"}}`.
+The former top-level `id`/`allow`/`scope` approval form remains accepted for
+compatibility (`scope="tool"` maps to `same_tool`); broad scopes are rejected.
 
 ### VoiceSession events (internal)
 
@@ -770,7 +773,8 @@ timeout_s = 60
 voice_confirm_phrase = true
 mute_uplink_during_approval = true
 # scope for "allow session" grant:
-session_grant_applies_to = "same_tool"  # once | same_tool | same_risk_class | all
+session_grant_applies_to = "same_tool"  # once | same_tool
+# Legacy same_risk_class/all values load as safe one-shot grants and are rewritten on save.
 
 [tools.git]
 # Structured tools own git. Shell may not bypass allow_commit/allow_push.

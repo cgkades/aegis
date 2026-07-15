@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
+from aegis.approval.modes import ApprovalHandler
 from aegis.audio import AudioGraph, AudioGraphConfig, sounddevice_available
 from aegis.audit import AuditLogger
 from aegis.config import AegisConfig, default_paths, load_config
@@ -33,7 +34,7 @@ log = get_logger("session.runner")
 
 # Poll interval for cost/duration caps while waiting for the next voice event.
 _EVENT_POLL_INTERVAL_S = 0.25
-_TEXT_ONLY_BACKENDS = {
+TEXT_ONLY_BACKENDS = {
     "ollama",
     "litellm",
     "chatgpt_oauth",
@@ -44,6 +45,8 @@ _TEXT_ONLY_BACKENDS = {
     "aws_bedrock",
     "hybrid_text_tools",
 }
+# Back-compat alias
+_TEXT_ONLY_BACKENDS = TEXT_ONLY_BACKENDS
 
 
 async def run_session_once(
@@ -54,6 +57,8 @@ async def run_session_once(
     max_seconds: float | None = None,
     graph: AudioGraph | None = None,
     install_signal_handlers: bool = True,
+    interactive_approval: bool | None = None,
+    approval_handler: ApprovalHandler | None = None,
 ) -> int:
     """Connect voice, stream mic (if available), play agent audio, exit on end/SIGINT.
 
@@ -61,8 +66,16 @@ async def run_session_once(
     don't open a second set of streams on the same device. When provided, we do not
     stop it on exit — the owner does. ``install_signal_handlers`` should be False
     when running inside a process (the daemon) that owns the loop's signal handlers.
+
+    ``interactive_approval``: when None, auto-detect via stdin TTY. Daemon hosts
+    should pass ``approval_handler`` (IPC broker) instead of relying on stdin.
     """
     paths = paths or default_paths()
+    paths.ensure_dirs()
+    if interactive_approval is None:
+        interactive_approval = approval_handler is None and bool(
+            getattr(sys.stdin, "isatty", lambda: False)()
+        )
     if str(backend).lower().replace("-", "_") in _TEXT_ONLY_BACKENDS:
         print(
             f"{backend} is a text-only provider and cannot be used by the voice session CLI yet. "
@@ -185,36 +198,49 @@ async def run_session_once(
             await session.end()
         status.set_presence(Presence.IDLE)
         return 1
+    except BaseException:
+        # CancelledError (and other BaseExceptions) during connect must still
+        # balance CloudAudioGateway open/close accounting.
+        if graph and owns_graph:
+            graph.stop()
+        if mcp_bridge is not None:
+            with contextlib.suppress(Exception):
+                await mcp_bridge.close()
+        with contextlib.suppress(Exception):
+            await session.end()
+        status.set_presence(Presence.IDLE)
+        raise
 
+    # Session is connected: every exit path (including cancel between here and
+    # the main loop) must run the teardown finally below.
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     # Save and restore any existing handlers so we don't permanently hijack the
     # daemon's SIGINT/SIGTERM handling when run in-process.
     installed_signals: list[signal.Signals] = []
-    if install_signal_handlers:
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            with contextlib.suppress(NotImplementedError):
-                loop.add_signal_handler(sig, stop.set)
-                installed_signals.append(sig)
-
     uplink_task: asyncio.Task[None] | None = None
-    if graph is not None:
-        uplink_task = asyncio.create_task(
-            _uplink_loop(session, graph, machine, stop),
-            name="uplink",
-        )
-
+    pending: asyncio.Task[VoiceEvent] | None = None
     auto_end_mock = str(backend) == "mock"
     last_activity = time.monotonic()
-
-    # Persistent iterator + in-flight __anext__ task. We never cancel the pending
-    # task on a poll timeout — cancelling it would throw CancelledError into the
-    # events() async generator and permanently close it, ending the session after
-    # the first quiet gap. Instead we wait on it with a timeout and keep it alive.
     events_iter = session.events().__aiter__()
-    pending: asyncio.Task[VoiceEvent] | None = None
 
     try:
+        if install_signal_handlers:
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                with contextlib.suppress(NotImplementedError):
+                    loop.add_signal_handler(sig, stop.set)
+                    installed_signals.append(sig)
+
+        if graph is not None:
+            uplink_task = asyncio.create_task(
+                _uplink_loop(session, graph, machine, stop),
+                name="uplink",
+            )
+
+        # Persistent iterator + in-flight __anext__ task. We never cancel the pending
+        # task on a poll timeout — cancelling it would throw CancelledError into the
+        # events() async generator and permanently close it, ending the session after
+        # the first quiet gap. Instead we wait on it with a timeout and keep it alive.
         while not stop.is_set() and time.monotonic() < deadline:
             if uplink_task is not None and uplink_task.done():
                 if not uplink_task.cancelled() and (exc := uplink_task.exception()) is not None:
@@ -268,11 +294,13 @@ async def run_session_once(
 
             if event.type is VoiceEventType.AGENT_AUDIO and event.pcm16:
                 metrics.mark_first_audio()
+                last_activity = time.monotonic()
                 if graph:
                     pcm = np.frombuffer(event.pcm16, dtype="<i2")
                     with contextlib.suppress(Exception):
                         graph.play_session_audio(pcm)
             elif event.type is VoiceEventType.AGENT_TRANSCRIPT and event.text:
+                last_activity = time.monotonic()
                 context.add_transcript("assistant", event.text)
                 print(f"Aegis: {event.text}", flush=True)
             elif event.type is VoiceEventType.USER_TRANSCRIPT and event.text:
@@ -287,14 +315,17 @@ async def run_session_once(
                     file=sys.stderr,
                 )
                 metrics.tool_calls += 1
+                last_activity = time.monotonic()
                 result = await handle_tool_call(
                     event.tool_call,
                     session=session,
                     registry=registry,
                     machine=machine,
                     cfg=cfg,
-                    interactive_approval=True,
+                    interactive_approval=interactive_approval,
+                    approval_handler=approval_handler,
                 )
+                last_activity = time.monotonic()
                 context.add_tool_result(event.tool_call.name, result.output)
                 if machine.state is SessionState.APPROVAL_PENDING:
                     status.set_presence(Presence.APPROVAL)
@@ -331,8 +362,16 @@ async def run_session_once(
         if machine.state is SessionState.ACTIVE:
             with contextlib.suppress(Exception):
                 machine.trigger(Trigger.HOTKEY_END)
-        with contextlib.suppress(Exception):
+        # End the voice session even when teardown is cancelled: gateway
+        # accounting lives in session.end()'s finally. Finish local cleanup
+        # before re-raising CancelledError.
+        teardown_cancelled = False
+        try:
             await session.end()
+        except asyncio.CancelledError:
+            teardown_cancelled = True
+        except Exception as exc:
+            log.warning("session.end during teardown: %s", exc)
         if machine.state is SessionState.ENDING:
             with contextlib.suppress(Exception):
                 machine.trigger(Trigger.TEARDOWN_DONE)
@@ -341,8 +380,10 @@ async def run_session_once(
         if mcp_bridge is not None:
             with contextlib.suppress(Exception):
                 await mcp_bridge.close()
-        with contextlib.suppress(Exception):
+        try:
             default_gateway.assert_idle_has_no_cloud()
+        except Exception as exc:
+            log.error("idle cloud invariant failed after session: %s", exc)
         report = metrics.report()
         print(
             f"Session ended. duration={report['duration_s']}s "
@@ -356,6 +397,8 @@ async def run_session_once(
             or machine.context.session_id,
             extra=report,
         )
+        if teardown_cancelled:
+            raise asyncio.CancelledError
 
     return 0
 

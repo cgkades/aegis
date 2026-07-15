@@ -306,6 +306,8 @@ def test_redaction_catches_secret_shapes(secret: str) -> None:
         ("https://192.168.1.9", True),
         ("https://172.16.0.1", True),
         ("https://example.com/path/10.0.0.1", False),  # private-looking path only
+        ("http://169.254.169.254/latest/meta-data/", True),  # link-local / metadata
+        ("http://[fe80::1]/80/", True),  # IPv6 link-local
     ],
 )
 def test_is_private_url(url: str, private: bool) -> None:

@@ -91,10 +91,12 @@ async def test_daemon_session_start_busy(paths: AegisPaths, monkeypatch) -> None
     assert r1.ok
     assert r1.result and r1.result.get("started") is True
 
-    # second start while running may be busy
+    # second start while running is busy (ok=false so clients do not treat as success)
     await asyncio.sleep(0.05)
     r2 = await send_request(paths.socket_path, "session.start", {"source": "test"})
-    assert r2.ok
+    assert not r2.ok
+    assert r2.result is not None
+    assert r2.result.get("started") is False
 
     await send_request(paths.socket_path, "session.stop")
     await send_request(paths.socket_path, "shutdown")
@@ -116,3 +118,39 @@ def test_parse_request_defaults() -> None:
     req = parse_request('{"op":"status"}')
     assert req.op == "status"
     assert req.id == "1"
+
+
+def test_parse_legacy_approval_response() -> None:
+    req = parse_request(
+        '{"op":"approval.respond","id":"call-1","allow":true,"scope":"tool"}'
+    )
+    assert req.id == "call-1"
+    assert req.params == {"allow": True, "scope": "tool"}
+
+
+def test_daemon_reload_preserves_config_path_and_profile(paths: AegisPaths) -> None:
+    custom = paths.config_dir / "custom.toml"
+    custom.write_text('[session]\nmodel = "from-custom"\n', encoding="utf-8")
+    daemon = AegisDaemon(build_config({}), paths, config_path=custom)
+    result = daemon._reload_config()
+    assert result.error is None
+    assert result.cfg.session.model == "from-custom"
+
+    profiled = AegisDaemon(build_config({}), paths, profile="oncall")
+    result = profiled._reload_config()
+    assert result.error is None
+    assert result.cfg.profile.name.value == "oncall"
+    assert result.cfg.session.model == "gpt-realtime-2.1"
+
+
+def test_daemon_reload_rejects_invalid_config_and_defers_wake_changes(paths: AegisPaths) -> None:
+    daemon = AegisDaemon(build_config({"wake": {"enabled": False}}), paths)
+    paths.config_file.write_text("[[[broken", encoding="utf-8")
+    invalid = daemon._reload_config()
+    assert invalid.error is not None
+
+    paths.config_file.write_text("[wake]\nenabled = true\n", encoding="utf-8")
+    reloaded = daemon._reload_config()
+    assert reloaded.error is None
+    assert reloaded.restart_required is True
+    assert daemon.cfg.wake.enabled is False

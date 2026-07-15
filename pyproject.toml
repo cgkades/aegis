@@ -46,7 +46,9 @@ dev = [
     "ruff>=0.8",
 ]
 all = [
-    "aegis[audio,dev]",
+    # porcupine is the only wake engine with installable wheels on Python 3.12+;
+    # openwakeword is intentionally not declared (tflite-runtime gap).
+    "aegis[audio,porcupine,dev]",
 ]
 
 [project.scripts]

@@ -55,6 +55,11 @@ class AegisPaths:
     def models_dir(self) -> Path:
         return self.data_dir / "models"
 
+    @property
+    def workspace_dir(self) -> Path:
+        """Default tools.working_directory sandbox root."""
+        return self.data_dir / "workspace"
+
     def ensure_dirs(self) -> None:
         """Create standard directories with restrictive permissions where appropriate."""
         for path in (
@@ -65,6 +70,7 @@ class AegisPaths:
             self.audit_dir,
             self.sessions_dir,
             self.models_dir,
+            self.workspace_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
             try:

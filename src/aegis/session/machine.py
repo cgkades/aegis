@@ -173,7 +173,9 @@ class SessionMachine:
 
         if new is SessionState.APPROVAL_PENDING:
             self._ctx.approval_in_flight = True
-            self._ctx.mute_uplink = True
+            # Honor tools.approval.mute_uplink_during_approval when provided via payload.
+            mute = event.payload.get("mute_uplink")
+            self._ctx.mute_uplink = True if mute is None else bool(mute)
 
         if old is SessionState.APPROVAL_PENDING and new is SessionState.ACTIVE:
             self._ctx.approval_in_flight = False

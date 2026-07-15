@@ -56,7 +56,13 @@ def create_voice_session(
     }:
         from aegis.llm.chat_session import ChatLLMSession
 
-        return ChatLLMSession(cfg, provider=provider, instructions=instructions)
+        # hybrid_text_tools may point chat at llm.chat_provider when set.
+        chat_provider = provider
+        if provider == "hybrid_text_tools":
+            raw = getattr(cfg.llm, "chat_provider", None)
+            if raw and str(raw) not in {"realtime", "hybrid_text_tools", "gpt_live"}:
+                chat_provider = str(raw)
+        return ChatLLMSession(cfg, provider=chat_provider, instructions=instructions)
 
     # default: realtime duplex
     if paths is not None:

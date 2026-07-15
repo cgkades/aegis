@@ -59,6 +59,54 @@ async def test_search_files(tmp_path: Path) -> None:
     assert "a.py" in result.output
 
 
+@pytest.mark.asyncio
+async def test_list_dir_default_is_workdir_not_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work = tmp_path / "work"
+    other = tmp_path / "other"
+    work.mkdir()
+    other.mkdir()
+    (work / "in_work.txt").write_text("w", encoding="utf-8")
+    (other / "in_other.txt").write_text("o", encoding="utf-8")
+    monkeypatch.chdir(other)
+    tools = ToolsConfig(working_directory=str(work), sandbox_to_workdir=True)
+    listed = await handle_list_dir({}, tools=tools)
+    assert not listed.is_error
+    assert "in_work.txt" in listed.output
+    assert "in_other.txt" not in listed.output
+
+
+@pytest.mark.asyncio
+async def test_relative_read_joins_workdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "rel.txt").write_text("relative-ok", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    tools = ToolsConfig(working_directory=str(work), sandbox_to_workdir=True)
+    read = await handle_read_file({"path": "rel.txt"}, tools=tools)
+    assert not read.is_error
+    assert "relative-ok" in read.output
+
+
+@pytest.mark.asyncio
+async def test_search_files_skips_symlink_escape(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    outside = tmp_path / "outside"
+    work.mkdir()
+    outside.mkdir()
+    secret = outside / "secret.key"
+    secret.write_text("top-secret", encoding="utf-8")
+    (work / "escape").symlink_to(outside)
+    tools = ToolsConfig(working_directory=str(work), sandbox_to_workdir=True)
+    result = await handle_search_files({"pattern": "*", "path": str(work)}, tools=tools)
+    assert not result.is_error
+    assert "secret.key" not in result.output
+    assert str(outside) not in result.output
+
+
 def test_mvp_registry_has_fs_not_shell() -> None:
     cfg = build_config({"profile": {"name": "mvp"}})
     reg = build_registry(cfg)

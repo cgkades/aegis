@@ -10,7 +10,8 @@ reasoning_effort = "medium"
 max_duration_s = 1800
 
 [tools]
-enabled = ["fs", "git", "process", "kubectl"]
+# Matches profiles.py ONCALL overlay (write pack included).
+enabled = ["fs", "git", "process", "write", "kubectl"]
 
 [tools.shell]
 enabled = false

@@ -11,10 +11,24 @@ from aegis.approval.modes import ApprovalResponse, denial_payload, result_from_d
 from aegis.config import build_config
 from aegis.session.events import SessionState, Trigger
 from aegis.session.machine import SessionMachine
-from aegis.session.tool_loop import handle_tool_call
+from aegis.session.tool_loop import _approval_summary, handle_tool_call
 from aegis.tools.factory import build_registry
 from aegis.voice.mock import MockVoiceSession
 from aegis.voice.protocol import ToolCallRequest
+
+
+def test_approval_summary_keeps_path_when_content_is_long() -> None:
+    """Path must remain visible even when content would fill a 300-char dump."""
+    path = "/home/user/.config/aegis/config.toml"
+    content = "a" * 500 + "\n[tools.shell]\nenabled = true\n"
+    summary = _approval_summary({"content": content, "path": path})
+    assert path in summary
+    assert "path=" in summary
+    assert "content=<" in summary
+    assert "sha256=" in summary
+    # Must not be pure content prefix (old sort_keys JSON truncate bug).
+    assert not summary.startswith('{"content"')
+    assert not summary.startswith("aaa")
 
 
 def test_denial_payload() -> None:

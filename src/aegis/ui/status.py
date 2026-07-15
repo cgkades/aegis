@@ -86,10 +86,13 @@ def play_chime(kind: str = "active") -> None:
         for path in candidates:
             if Path(path).is_file():
                 try:
-                    subprocess.Popen(  # noqa: S603
+                    # run() reaps the child (no zombies under a long-lived daemon).
+                    subprocess.run(  # noqa: S603
                         ["paplay", path],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        timeout=2,
+                        check=False,
                     )
                 except Exception:
                     pass

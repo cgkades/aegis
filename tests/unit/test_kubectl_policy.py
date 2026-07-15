@@ -47,18 +47,44 @@ async def test_kubectl_namespace_not_allowed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_kubectl_mutating_needs_approval() -> None:
+async def test_kubectl_get_secrets_needs_approval() -> None:
     tools = ToolsConfig(
         kubectl=ToolsKubectlConfig(
             enabled=True,
-            allowed_verbs=["get", "apply"],
+            allowed_verbs=["get"],
             allowed_namespaces=["staging"],
         )
     )
     r = await handle_kubectl(
-        {"verb": "apply", "resource": "-f", "extra_args": ["manifest.yaml"]},
+        {"verb": "get", "resource": "secrets", "namespace": "staging"},
         tools=tools,
         approved=False,
     )
-    # apply is write/destroy class → prompt
-    assert r.decision == "prompt" or "approval" in r.output
+    assert r.is_error
+    assert r.decision == "prompt"
+    assert r.risk == "secrets"
+    assert r.meta.get("needs_approval")
+
+
+@pytest.mark.asyncio
+async def test_kubectl_mutating_needs_approval() -> None:
+    tools = ToolsConfig(
+        kubectl=ToolsKubectlConfig(
+            enabled=True,
+            allowed_verbs=["get", "delete"],
+            allowed_namespaces=["staging"],
+        )
+    )
+    r = await handle_kubectl(
+        {
+            "verb": "delete",
+            "resource": "pod",
+            "name": "x",
+            "namespace": "staging",
+        },
+        tools=tools,
+        approved=False,
+    )
+    # delete is write/destroy class → prompt
+    assert r.decision == "prompt"
+    assert r.meta.get("needs_approval")

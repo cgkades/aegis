@@ -72,6 +72,24 @@ def test_apply_and_save_config(tmp_path: Path) -> None:
     assert reloaded.session.max_session_cost_usd == 5.5
 
 
+def test_profile_save_preserves_user_overrides_and_resets_old_profile_defaults() -> None:
+    standard = build_config(
+        {
+            "profile": {"name": "standard"},
+            "tools": {"enabled": ["fs"], "git": {"enabled": False}},
+        }
+    )
+    unchanged = apply_llm_settings(standard, profile="standard", voice="coral")
+    assert unchanged.tools.enabled == ["fs"]
+    assert unchanged.tools.git.enabled is False
+
+    oncall = build_config({"profile": {"name": "oncall"}})
+    switched = apply_llm_settings(oncall, profile="mvp")
+    mvp = build_config({})
+    assert switched.tools.enabled == mvp.tools.enabled
+    assert switched.session.max_duration_s == mvp.session.max_duration_s
+
+
 def test_config_to_toml_roundtrip_keys() -> None:
     cfg = build_config({"session": {"model": "gpt-realtime-2.1-mini"}})
     toml = config_to_toml(cfg)

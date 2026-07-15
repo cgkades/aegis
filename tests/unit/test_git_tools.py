@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from aegis.config.schema import ToolsConfig, ToolsGitConfig
 from aegis.tools.builtin.git_tools import handle_git_log, handle_git_status
+from aegis.tools.types import ToolResult
 
 
 def _git_repo(tmp_path: Path) -> Path:
@@ -49,3 +51,25 @@ async def test_git_status_and_log(tmp_path: Path) -> None:
     log = await handle_git_log({"path": str(repo), "n": 5}, tools=tools)
     assert not log.is_error
     assert "init" in log.output
+
+
+@pytest.mark.asyncio
+async def test_git_relative_path_uses_configured_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "repo").mkdir()
+    other_cwd = tmp_path / "other"
+    other_cwd.mkdir()
+    monkeypatch.chdir(other_cwd)
+    tools = ToolsConfig(working_directory=str(workspace), git=ToolsGitConfig(enabled=True))
+
+    with patch(
+        "aegis.tools.builtin.git_tools._git",
+        new=AsyncMock(return_value=ToolResult(output="ok", risk="read")),
+    ) as git:
+        result = await handle_git_status({"path": "repo"}, tools=tools)
+
+    assert not result.is_error
+    assert git.await_args.args[1] == str((workspace / "repo").resolve())

@@ -3,24 +3,32 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from pathlib import Path
 from typing import Any
 
 from aegis.config.schema import ToolsConfig
-from aegis.tools.executor import _kill_process_group
-from aegis.tools.policy import path_within_workdir, scrubbed_env
+from aegis.tools.executor import terminate_process
+from aegis.tools.policy import path_inside_workdir, resolve_tool_path, scrubbed_env
 from aegis.tools.types import ToolResult, ToolSpec, err_json
 
 
 def _resolve_cwd(arguments: dict[str, Any], tools: ToolsConfig) -> str | ToolResult:
     """Resolve the repo path, enforcing the workdir sandbox (like the file tools)."""
     path = str(Path(arguments.get("path") or tools.working_directory).expanduser())
-    if not path_within_workdir(path, tools):
+    try:
+        cwd = resolve_tool_path(path, tools)
+    except OSError:
+        return ToolResult(
+            output=err_json("path_resolve_failed"),
+            is_error=True,
+            risk="read",
+            decision="deny",
+        )
+    if not path_inside_workdir(cwd, tools):
         return ToolResult(
             output=err_json("sandbox"), is_error=True, risk="read", decision="deny"
         )
-    return path
+    return str(cwd)
 
 # git needs only PATH/HOME (plus these) — never the full secret-bearing env.
 _GIT_ENV_ALLOW = ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "XDG_CONFIG_HOME")
@@ -48,10 +56,11 @@ async def _git(args: list[str], cwd: str, timeout: int = 30) -> ToolResult:
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except TimeoutError:
-        _kill_process_group(proc.pid)
-        with contextlib.suppress(Exception):
-            await proc.wait()
+        await terminate_process(proc)
         return ToolResult(output='{"error":"timeout"}', is_error=True, risk="read")
+    except asyncio.CancelledError:
+        await terminate_process(proc)
+        raise
     out = stdout.decode("utf-8", errors="replace")
     err = stderr.decode("utf-8", errors="replace")
     text = out if out else err

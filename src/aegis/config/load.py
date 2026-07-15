@@ -45,9 +45,18 @@ def build_config(
     user_dict: dict[str, Any] | None = None,
     *,
     profile: ProfileName | str | None = None,
+    workspace_dir: Path | None = None,
 ) -> AegisConfig:
     """Merge defaults ← profile overlay ← user dict and validate."""
     user_dict = dict(user_dict or {})
+    tools = user_dict.get("tools")
+    if workspace_dir is not None and (
+        tools is None or (isinstance(tools, dict) and "working_directory" not in tools)
+    ):
+        user_dict = deep_merge(
+            user_dict,
+            {"tools": {"working_directory": str(workspace_dir)}},
+        )
     if profile is not None:
         user_dict = deep_merge(user_dict, {"profile": {"name": str(profile)}})
 
@@ -88,10 +97,14 @@ def load_config(
     if not config_path.is_file():
         if not missing_ok:
             raise ConfigError(f"config file not found: {config_path}")
-        return build_config({}, profile=profile or ProfileName.MVP)
+        return build_config(
+            {},
+            profile=profile or ProfileName.MVP,
+            workspace_dir=paths.workspace_dir,
+        )
 
     user_dict = load_toml_file(config_path)
-    return build_config(user_dict, profile=profile)
+    return build_config(user_dict, profile=profile, workspace_dir=paths.workspace_dir)
 
 
 def validate_config_file(path: Path) -> AegisConfig:

@@ -37,6 +37,40 @@ _CSRF_TOKEN = secrets.token_urlsafe(32)
 # attacker domain to 127.0.0.1 to reach this loopback server.
 _ALLOWED_HOST_NAMES = {"127.0.0.1", "localhost", "[::1]", "::1"}
 
+# Cap POST bodies so a local client cannot OOM the settings process.
+_MAX_JSON_BODY_BYTES = 256 * 1024
+_MAX_ENV_KEY_BODY_BYTES = 8 * 1024
+
+# secrets.env is for API keys / provider credentials — not arbitrary process env.
+_ALLOWED_ENV_KEYS = frozenset(
+    {
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "LITELLM_API_KEY",
+        "LITELLM_BASE_URL",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_API_VERSION",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "BEDROCK_API_KEY",
+        "PICOVOICE_ACCESS_KEY",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_API_KEY",
+        "GROQ_API_KEY",
+        "TOGETHER_API_KEY",
+        "MISTRAL_API_KEY",
+        "COHERE_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "XAI_API_KEY",
+        "OLLAMA_API_KEY",
+        "OLLAMA_HOST",
+    }
+)
+
 
 def _settings_dict(cfg) -> dict[str, Any]:
     return {
@@ -140,7 +174,7 @@ class SettingsHandler(BaseHTTPRequestHandler):
         data = json.dumps(payload).encode("utf-8")
         self._send(code, data, "application/json; charset=utf-8")
 
-    def _read_json(self) -> dict[str, Any]:
+    def _read_json(self, *, max_bytes: int = _MAX_JSON_BODY_BYTES) -> dict[str, Any]:
         # Require exactly application/json — a cross-origin "simple" POST cannot set
         # this content type without triggering a CORS preflight, so this (with the
         # CSRF check) blocks drive-by requests from other web pages.
@@ -148,7 +182,13 @@ class SettingsHandler(BaseHTTPRequestHandler):
         if ctype != "application/json":
             raise ValueError("content-type must be application/json")
         length = int(self.headers.get("Content-Length") or 0)
+        if length < 0:
+            raise ValueError("invalid content-length")
+        if length > max_bytes:
+            raise ValueError(f"body too large (max {max_bytes} bytes)")
         raw = self.rfile.read(length) if length else b"{}"
+        if len(raw) > max_bytes:
+            raise ValueError(f"body too large (max {max_bytes} bytes)")
         try:
             data = json.loads(raw.decode("utf-8") or "{}")
         except json.JSONDecodeError as exc:
@@ -283,13 +323,20 @@ class SettingsHandler(BaseHTTPRequestHandler):
                 return
 
             if path == "/api/env-key":
-                body = self._read_json()
+                body = self._read_json(max_bytes=_MAX_ENV_KEY_BODY_BYTES)
                 key = str(body.get("key") or "OPENAI_API_KEY").strip()
                 value = str(body.get("value") or "").strip()
                 if not key or not value:
                     raise ValueError("key and value required")
                 if any(c in key for c in " =\n\r"):
                     raise ValueError("invalid key name")
+                if key not in _ALLOWED_ENV_KEYS and not (
+                    key.endswith("_API_KEY") or key.endswith("_ACCESS_KEY")
+                ):
+                    raise ValueError(
+                        f"key {key!r} not allowed in secrets.env "
+                        "(use known provider key names)"
+                    )
                 # Write to the user's secrets file (inside the 0700 config dir),
                 # not $CWD/.env — the server may be launched from anywhere and we
                 # must not scatter API keys into arbitrary working directories.

@@ -71,11 +71,21 @@ class LocalMcpBridge:
             safe_server = _safe(server.name)
             safe_tool = _safe(tool.name)
             reg_name = f"mcp_{safe_server}_{safe_tool}"
+            raw_desc = str(tool.description or tool.name)
+            # Cap length and strip control chars so a malicious MCP cannot
+            # flood the model prompt with huge/control-laden metadata.
+            safe_desc = "".join(ch for ch in raw_desc if ch.isprintable() or ch in "\n\t")
+            if len(safe_desc) > 500:
+                safe_desc = safe_desc[:499] + "…"
+            params = tool.input_schema or {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            }
             spec = ToolSpec(
                 name=reg_name,
-                description=f"[MCP:{server.name}] {tool.description or tool.name}",
-                parameters=tool.input_schema
-                or {"type": "object", "properties": {}, "additionalProperties": True},
+                description=f"[MCP:{server.name}] {safe_desc}",
+                parameters=params,
                 risk="exec",  # MCP tools default to prompt via risk!=read under auto_readonly
                 handler=_make_handler(client, tool.name, server.name),
                 source=f"mcp:{server.name}",

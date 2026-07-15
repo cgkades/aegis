@@ -200,10 +200,22 @@ def evaluate_run_command(argv: list[str] | Any, tools: ToolsConfig) -> PolicyRes
     )
 
 
+def resolve_tool_path(path: str, tools: ToolsConfig) -> Path:
+    """Resolve a tool path relative to ``tools.working_directory`` when not absolute.
+
+    Relative paths (including ``.``) are joined under the configured workdir, not
+    the process CWD — matches the advertised FS tool contract.
+    """
+    raw = Path(path).expanduser()
+    if not raw.is_absolute():
+        raw = Path(tools.working_directory).expanduser() / raw
+    return raw.resolve()
+
+
 def evaluate_read_file(path: str, tools: ToolsConfig) -> PolicyResult:
     """Path sandbox + secrets for structured read_file."""
     try:
-        rp = Path(path).expanduser().resolve()
+        rp = resolve_tool_path(path, tools)
     except OSError:
         return PolicyResult(PolicyDecision.DENY, "read", "path_resolve_failed")
     workdir = Path(tools.working_directory).expanduser().resolve()
@@ -230,11 +242,19 @@ def path_within_workdir(path: str, tools: ToolsConfig) -> bool:
     if not tools.sandbox_to_workdir:
         return True
     try:
-        rp = Path(path).expanduser().resolve()
+        rp = resolve_tool_path(path, tools)
     except OSError:
         return False
     workdir = Path(tools.working_directory).expanduser().resolve()
     return _is_inside(rp, workdir)
+
+
+def path_inside_workdir(resolved: Path, tools: ToolsConfig) -> bool:
+    """True if an already-resolved path stays inside the sandbox workdir."""
+    if not tools.sandbox_to_workdir:
+        return True
+    workdir = Path(tools.working_directory).expanduser().resolve()
+    return _is_inside(resolved, workdir)
 
 
 def matches_secrets_globs(path: str, globs: list[str]) -> bool:
@@ -399,14 +419,16 @@ def _violates_flag_policy(base: str, args: list[str], rule: ShellRule) -> bool:
         flag = a.split("=", 1)[0]
         if flag in denied:
             return True
-        # denied long options for rg
-        if base in {"rg", "git"} and flag in denied:
-            return True
-        if allowed is not None and base in {"rg"} and flag.startswith("--"):
-            if flag not in allowed and flag not in {"--help", "--version"}:
-                # allow common short; for long require allowlist for dangerous ones only
-                if flag in {"--pre", "--pre-glob", "--config", "--debugconfig"}:
-                    return True
+        # Positive allowlist when non-empty (empty set means "verbs only", e.g. git).
+        if allowed is not None and len(allowed) > 0:
+            if flag not in allowed and flag not in {
+                "-h",
+                "--help",
+                "--version",
+                "-V",
+            }:
+                return True
+        # Always block known code-exec footguns on rg/git even without allowlist.
         if flag in {"--pre", "--pre-glob", "--config", "--debugconfig", "-c", "--exec-path"}:
             if flag in denied or base in {"rg", "git"}:
                 return True

@@ -2,31 +2,40 @@
 
 from __future__ import annotations
 
+import ipaddress
 from urllib.parse import urlparse
 
 
 def is_private_url(url: str) -> bool:
-    """True if the URL's host is loopback or an RFC1918 private address.
+    """True if the URL host is not safe for remote MCP / outbound fetches.
 
-    Parses the hostname (not a substring match) so a path or query containing
-    something like "10." can't produce a false positive, and "https://10.x" is
-    correctly detected. On parse failure we fail closed (treat as private).
+    Covers loopback, RFC1918, link-local (incl. cloud metadata 169.254.0.0/16),
+    ULA, CGNAT, and unspecified. On parse failure we fail closed (private).
     """
     try:
         host = (urlparse(url).hostname or "").lower()
     except Exception:
         return True
-    if host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}:
+    if not host:
         return True
-    if host.startswith("127."):
+    if host in {"localhost", "0.0.0.0", "::", "::1"}:
         return True
-    if host.startswith("10.") or host.startswith("192.168."):
-        return True
-    if host.startswith("172."):
-        try:
-            second = int(host.split(".")[1])
-            if 16 <= second <= 31:
-                return True
-        except (IndexError, ValueError):
-            pass
-    return False
+    # Strip IPv6 brackets if present (urlparse usually handles this).
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        # Hostname: check common private DNS names; literal IPs handled above.
+        if host.endswith(".local") or host.endswith(".localhost"):
+            return True
+        # Non-literal hostnames are treated as public (caller may resolve later).
+        return False
+    return bool(
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )

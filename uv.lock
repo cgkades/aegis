@@ -17,6 +17,7 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "coverage" },
+    { name = "pvporcupine" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -39,7 +40,7 @@ porcupine = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aegis", extras = ["audio", "dev"], marker = "extra == 'all'" },
+    { name = "aegis", extras = ["audio", "porcupine", "dev"], marker = "extra == 'all'" },
     { name = "click", specifier = ">=8.1" },
     { name = "coverage", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "numpy", specifier = ">=2.0" },

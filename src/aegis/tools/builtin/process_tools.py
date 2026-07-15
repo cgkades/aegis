@@ -5,11 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from pathlib import Path
 from typing import Any
 
 from aegis.config.schema import ToolsConfig
-from aegis.tools.policy import evaluate_read_file, gate
+from aegis.tools.policy import evaluate_read_file, gate, resolve_tool_path
 from aegis.tools.types import ToolResult, ToolSpec, err_json
 from aegis.util.secrets import redact_secrets
 
@@ -21,7 +20,10 @@ async def handle_list_processes(
     approved: bool = False,
     spec: ToolSpec | None = None,
 ) -> ToolResult:
+    from aegis.tools.executor import terminate_process
+
     pattern = arguments.get("filter") or ""
+    proc: asyncio.subprocess.Process | None = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "ps",
@@ -31,9 +33,24 @@ async def handle_list_processes(
             "--sort=-%cpu",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+    except TimeoutError:
+        if proc is not None:
+            await terminate_process(proc)
+        return ToolResult(
+            output=err_json("ps_failed", detail="timeout"),
+            is_error=True,
+            risk="read",
+        )
+    except asyncio.CancelledError:
+        if proc is not None:
+            await terminate_process(proc)
+        raise
     except Exception as exc:
+        if proc is not None and proc.returncode is None:
+            await terminate_process(proc)
         return ToolResult(output=err_json("ps_failed", detail=str(exc)), is_error=True, risk="read")
     lines = stdout.decode("utf-8", errors="replace").splitlines()
     if not lines:
@@ -63,7 +80,7 @@ async def handle_tail_log(
     if (gated := gate(policy, arguments=arguments, approved=approved)) is not None:
         return gated
 
-    target = Path(path).expanduser()
+    target = resolve_tool_path(path, tools)
     if not target.is_file():
         return ToolResult(output=err_json("not_a_file", path=path), is_error=True)
     try:

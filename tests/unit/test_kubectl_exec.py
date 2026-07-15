@@ -26,7 +26,10 @@ async def test_kubectl_get_success() -> None:
         async def communicate(self):
             return b"NAME ready\n", b""
 
+    captured: list[tuple] = []
+
     async def fake_exec(*args, **kwargs):
+        captured.append((args, kwargs))
         return Proc()
 
     with (
@@ -45,6 +48,19 @@ async def test_kubectl_get_success() -> None:
         )
     assert not r.is_error
     assert "NAME" in r.output
+    assert captured
+    argv = captured[0][0]
+    assert argv == (
+        "kubectl",
+        "get",
+        "-n",
+        "staging",
+        "-o",
+        "name",
+        "--",
+        "pods",
+    )
+    assert captured[0][1].get("shell") is not True
 
 
 @pytest.mark.asyncio
@@ -107,6 +123,61 @@ async def test_kubectl_context_denied() -> None:
         tools=tools,
     )
     assert "context_not_allowed" in r.output
+
+
+@pytest.mark.asyncio
+async def test_kubectl_context_required_when_allowlist_set() -> None:
+    """Omitting context must not fall through to ambient current-context."""
+    tools = ToolsConfig(
+        kubectl=ToolsKubectlConfig(
+            enabled=True,
+            allowed_verbs=["get"],
+            context_allowlist=["dev"],
+        )
+    )
+    r = await handle_kubectl(
+        {"verb": "get", "resource": "pods"},
+        tools=tools,
+    )
+    assert r.is_error
+    assert r.decision == "deny"
+    assert "context_not_allowed" in r.output
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("resource", "--kubeconfig=/tmp/evil"),
+        ("resource", "--server=https://evil.example"),
+        ("resource", "-n"),
+        ("name", "--token=abc"),
+        ("name", "--context=prod"),
+    ],
+)
+async def test_kubectl_rejects_flag_smuggled_as_positional(
+    field: str, value: str
+) -> None:
+    tools = ToolsConfig(
+        kubectl=ToolsKubectlConfig(
+            enabled=True,
+            allowed_verbs=["get"],
+            allowed_namespaces=["staging"],
+        )
+    )
+    args: dict = {
+        "verb": "get",
+        "namespace": "staging",
+        "resource": "pods",
+    }
+    args[field] = value
+    with patch("aegis.tools.oncall.kubectl_tools.shutil.which", return_value="/usr/bin/kubectl"):
+        with patch("asyncio.create_subprocess_exec") as spawn:
+            r = await handle_kubectl(args, tools=tools)
+    assert r.is_error
+    assert r.decision == "deny"
+    assert "invalid_" in r.output
+    spawn.assert_not_called()
 
 
 def test_kubectl_specs() -> None:

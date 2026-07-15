@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from aegis.audit import AuditLogger
-from aegis.config.schema import ToolsConfig
+from aegis.config.schema import ApprovalDefault, ToolsConfig
 from aegis.tools.types import (
     ToolResult,
     ToolSpec,
@@ -125,6 +125,34 @@ class ToolRegistry:
                     decision="deny",
                 )
 
+        approval_mode = self.tools_config.approval.default
+        session_granted = self._is_session_granted(name, arguments)
+        effective_approved = approved or session_granted
+
+        # Global approval mode (schema tools.approval.default) — enforced here so
+        # every tool pack shares one choke point. Handlers still apply path/argv
+        # policy when the call is allowed through.
+        if approval_mode is ApprovalDefault.DENY_ALL and not approved:
+            # deny_all is absolute: session grants do not bypass it.
+            return ToolResult(
+                output=err_json("denied", reason="approval_default_deny_all"),
+                is_error=True,
+                risk=spec.risk,
+                decision="deny",
+            )
+        if (
+            approval_mode is ApprovalDefault.PROMPT_ALL
+            and not effective_approved
+        ):
+            return ToolResult(
+                output=err_json("approval_required", reason="approval_default_prompt_all"),
+                is_error=True,
+                risk=spec.risk,
+                decision="prompt",
+                meta={"needs_approval": True, "arguments": arguments},
+            )
+        # auto_readonly: per-handler / policy risk rules (unchanged).
+
         self._turn_calls += 1
         self._session_calls += 1
 
@@ -132,7 +160,7 @@ class ToolRegistry:
             result = await spec.handler(
                 arguments,
                 tools=self.tools_config,
-                approved=approved or self._is_session_granted(name, arguments),
+                approved=effective_approved,
                 spec=spec,
             )
         except Exception as exc:
@@ -142,6 +170,12 @@ class ToolRegistry:
                 is_error=True,
                 risk=spec.risk,
             )
+
+        # Approval probe (needs_approval) is not a completed tool use — do not
+        # charge turn/session budgets until the approved re-dispatch runs.
+        if result.meta.get("needs_approval"):
+            self._turn_calls = max(0, self._turn_calls - 1)
+            self._session_calls = max(0, self._session_calls - 1)
 
         if self.audit:
             self.audit.log(

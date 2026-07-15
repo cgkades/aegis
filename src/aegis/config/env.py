@@ -109,6 +109,8 @@ def env_status(keys: list[str] | None = None) -> dict[str, dict[str, object]]:
         "AWS_PROFILE",
         "PICOVOICE_ACCESS_KEY",
         "OPENAI_REALTIME_URL",
+        # Note: AEGIS_PROFILE is display-only today; load_config uses config.toml
+        # or CLI --profile. Listed so operators see it if they set it by habit.
         "AEGIS_PROFILE",
     ]
     result: dict[str, dict[str, object]] = {}

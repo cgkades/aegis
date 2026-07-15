@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from aegis.config.schema import ToolsConfig
-from aegis.tools.policy import evaluate_read_file, matches_secrets_globs
+from aegis.tools.policy import evaluate_read_file, matches_secrets_globs, resolve_tool_path
 from aegis.tools.types import PolicyDecision, ToolResult, ToolSpec, err_json
 
 
@@ -22,6 +21,16 @@ async def handle_write_file(
     if not isinstance(path, str) or not isinstance(content, str):
         return ToolResult(output=err_json("path_and_content_required"), is_error=True)
 
+    content_bytes = len(content.encode("utf-8", errors="replace"))
+    max_write = getattr(tools, "max_write_bytes", None) or tools.max_output_bytes
+    if content_bytes > max_write:
+        return ToolResult(
+            output=err_json("content_too_large", bytes=content_bytes, max=max_write),
+            is_error=True,
+            risk="write",
+            decision="deny",
+        )
+
     # Reuse path sandbox rules — honor ANY deny reason, not just "sandbox".
     policy = evaluate_read_file(path, tools)
     if policy.decision is PolicyDecision.DENY:
@@ -31,10 +40,8 @@ async def handle_write_file(
             risk="write",
             decision="deny",
         )
-    if matches_secrets_globs(
-        str(Path(path).expanduser().resolve()),
-        tools.secrets.path_globs,
-    ):
+    target = resolve_tool_path(path, tools)
+    if matches_secrets_globs(str(target), tools.secrets.path_globs):
         return ToolResult(
             output='{"error":"secrets_path_write_denied"}',
             is_error=True,
@@ -48,10 +55,14 @@ async def handle_write_file(
             is_error=True,
             risk="write",
             decision="prompt",
-            meta={"needs_approval": True, "arguments": {"path": path, "bytes": len(content)}},
+            meta={
+                "needs_approval": True,
+                "arguments": {"path": str(target), "bytes": content_bytes},
+            },
         )
 
-    target = Path(path).expanduser()
+    # Re-resolve under workdir immediately before write (TOCTOU resistance).
+    target = resolve_tool_path(path, tools)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
@@ -89,10 +100,8 @@ async def handle_apply_patch(
             risk="write",
             decision="deny",
         )
-    if matches_secrets_globs(
-        str(Path(path).expanduser().resolve()),
-        tools.secrets.path_globs,
-    ):
+    target = resolve_tool_path(path, tools)
+    if matches_secrets_globs(str(target), tools.secrets.path_globs):
         return ToolResult(
             output='{"error":"secrets_path_write_denied"}',
             is_error=True,
@@ -105,10 +114,10 @@ async def handle_apply_patch(
             is_error=True,
             risk="write",
             decision="prompt",
-            meta={"needs_approval": True, "arguments": {"path": path}},
+            meta={"needs_approval": True, "arguments": {"path": str(target)}},
         )
 
-    target = Path(path).expanduser()
+    target = resolve_tool_path(path, tools)
     try:
         text = target.read_text(encoding="utf-8")
     except OSError as exc:

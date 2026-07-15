@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 from aegis.config.schema import ToolsConfig
-from aegis.tools.policy import evaluate_list_dir, evaluate_read_file, gate
+from aegis.tools.policy import (
+    evaluate_list_dir,
+    evaluate_read_file,
+    gate,
+    path_inside_workdir,
+    resolve_tool_path,
+)
 from aegis.tools.types import ToolResult, ToolSpec, err_json
 
 
@@ -18,14 +23,15 @@ async def handle_list_dir(
     approved: bool = False,
     spec: ToolSpec | None = None,
 ) -> ToolResult:
-    path = arguments.get("path") or "."
+    # Default to configured workdir (not process CWD).
+    path = arguments.get("path") or tools.working_directory
     if not isinstance(path, str):
         return ToolResult(output=err_json("invalid_path"), is_error=True)
     policy = evaluate_list_dir(path, tools)
     if (gated := gate(policy, arguments=arguments, approved=approved)) is not None:
         return gated
 
-    target = Path(path).expanduser().resolve()
+    target = resolve_tool_path(path, tools)
     if not target.exists():
         return ToolResult(output=err_json("not_found", path=path), is_error=True)
     if not target.is_dir():
@@ -62,7 +68,7 @@ async def handle_read_file(
     if (gated := gate(policy, arguments=arguments, approved=approved)) is not None:
         return gated
 
-    target = Path(path).expanduser().resolve()
+    target = resolve_tool_path(path, tools)
     if not target.is_file():
         return ToolResult(output=err_json("not_a_file", path=path), is_error=True)
 
@@ -98,12 +104,21 @@ async def handle_search_files(
     if (gated := gate(policy, arguments=arguments, approved=approved)) is not None:
         return gated
 
-    base = Path(root).expanduser().resolve()
+    base = resolve_tool_path(root, tools)
     matches: list[str] = []
     try:
         for p in base.rglob(pattern):
-            if p.is_file():
-                matches.append(str(p))
+            # Skip directory-symlink escapes: only report files whose resolved
+            # path remains inside the sandbox workdir.
+            try:
+                if not p.is_file():
+                    continue
+                resolved = p.resolve()
+            except OSError:
+                continue
+            if not path_inside_workdir(resolved, tools):
+                continue
+            matches.append(str(resolved))
             if len(matches) >= 200:
                 break
     except OSError as exc:

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
 
 from aegis.config.schema import DEFAULT_READ_SHELL_RULES, ToolsConfig, ToolsShellConfig
-from aegis.tools.executor import _kill_process_group, _truncate, run_argv
+from aegis.tools.executor import _kill_process_group, _truncate, run_argv, terminate_process
 
 
 @pytest.mark.asyncio
@@ -36,3 +37,17 @@ def test_truncate():
 def test_kill_process_group_invalid():
     _kill_process_group(None)
     _kill_process_group(99999999)
+
+
+@pytest.mark.asyncio
+async def test_terminate_process_drains_verbose_child() -> None:
+    proc = await asyncio.create_subprocess_exec(
+        "python3",
+        "-c",
+        "import sys, time; sys.stdout.write('x' * 200000); sys.stdout.flush(); time.sleep(30)",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+    )
+    await asyncio.wait_for(terminate_process(proc), timeout=2)
+    assert proc.returncode is not None

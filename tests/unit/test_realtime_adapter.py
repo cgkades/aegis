@@ -12,8 +12,13 @@ import pytest
 
 from aegis.config.schema import SessionConfig
 from aegis.voice.gateway import CloudAudioGateway
-from aegis.voice.protocol import VoiceEventType
-from aegis.voice.realtime import RealtimeVoiceSession, _usage_from_response
+from aegis.voice.protocol import ToolCallRequest, VoiceEvent, VoiceEventType
+from aegis.voice.realtime import (
+    _EVENT_QUEUE_MAX,
+    _MAX_FUNCTION_ARG_TOTAL_BYTES,
+    RealtimeVoiceSession,
+    _usage_from_response,
+)
 
 
 class FakeWS:
@@ -126,6 +131,42 @@ async def test_realtime_connect_cancellation_closes_gateway() -> None:
     assert not gateway.is_open
 
 
+@pytest.mark.asyncio
+async def test_realtime_end_register_close_survives_cancel() -> None:
+    """Cancel during end() must still run register_close (gateway idle again)."""
+    gateway = CloudAudioGateway()
+    session = RealtimeVoiceSession(api_key="sk-test", gateway=gateway)
+
+    class HangWS(FakeWS):
+        """Never finishes the recv loop until close is called."""
+
+        def __init__(self) -> None:
+            super().__init__([])
+            self._gate = asyncio.Event()
+
+        async def __anext__(self):
+            await self._gate.wait()
+            raise StopAsyncIteration
+
+        async def close(self) -> None:
+            self._gate.set()
+            raise asyncio.CancelledError
+
+    fake = HangWS()
+
+    async def fake_connect(*args, **kwargs):
+        return fake
+
+    with patch("aegis.voice.realtime.websockets.connect", side_effect=fake_connect):
+        await session.connect(SessionConfig())
+        # Let recv task park on the hang gate so it does not spontaneous-close.
+        await asyncio.sleep(0)
+        assert gateway.is_open
+        with pytest.raises(asyncio.CancelledError):
+            await session.end()
+        assert not gateway.is_open
+
+
 def test_usage_from_response_flat() -> None:
     msg = {
         "type": "response.done",
@@ -164,3 +205,47 @@ async def test_realtime_handle_mcp_event() -> None:
         await asyncio.sleep(0.1)
         await session.end()
         task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_realtime_backpressure_preserves_queued_tool_calls() -> None:
+    session = RealtimeVoiceSession(api_key="sk-test", gateway=CloudAudioGateway())
+    tool = VoiceEvent(
+        type=VoiceEventType.TOOL_CALL,
+        tool_call=ToolCallRequest(call_id="call-1", name="read_file", arguments={}),
+    )
+    await session._put_event(tool)
+    for _ in range(_EVENT_QUEUE_MAX - 1):
+        await session._put_event(VoiceEvent(type=VoiceEventType.AGENT_AUDIO, pcm16=b"\0\0"))
+    await session._put_event(VoiceEvent(type=VoiceEventType.ERROR, message="network"))
+
+    events = [session._events.get_nowait() for _ in range(session._events.qsize())]
+    assert tool in events
+    assert any(event and event.type is VoiceEventType.ERROR for event in events)
+
+
+@pytest.mark.asyncio
+async def test_realtime_function_argument_aggregate_budget() -> None:
+    session = RealtimeVoiceSession(api_key="sk-test", gateway=CloudAudioGateway())
+    for call_id in ("a", "b", "c"):
+        await session._handle_server_event(
+            {
+                "type": "response.function_call_arguments.delta",
+                "call_id": call_id,
+                "delta": "x" * 400_000,
+            }
+        )
+
+    assert "c" in session._function_arg_overflows
+    assert session._function_arg_total_bytes <= _MAX_FUNCTION_ARG_TOTAL_BYTES
+    await session._handle_server_event(
+        {
+            "type": "response.function_call_arguments.done",
+            "call_id": "c",
+            "name": "write_file",
+            "arguments": "",
+        }
+    )
+    event = session._events.get_nowait()
+    assert event is not None and event.tool_call is not None
+    assert event.tool_call.name == ""

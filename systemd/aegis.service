@@ -3,17 +3,20 @@ Description=Aegis voice agent daemon
 After=network-online.target sound.target
 Wants=network-online.target
 
+# Stop crash-looping on a bad config (aegis daemon exits 78 = EX_CONFIG): give up
+# after 5 failures in 60s so systemd doesn't hammer a broken config file forever.
+# StartLimit* belong under [Unit] on modern systemd.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
 [Service]
 Type=simple
 ExecStart=%h/.local/bin/aegis daemon
 Restart=on-failure
 RestartSec=2
-# Stop crash-looping on a bad config (aegis daemon exits 78 = EX_CONFIG): give up
-# after 5 failures in 60s so systemd doesn't hammer a broken config file forever.
-StartLimitIntervalSec=60
-StartLimitBurst=5
 Environment=PYTHONUNBUFFERED=1
 # Provide OPENAI_API_KEY via environment.d or secrets.env — do not hardcode here.
+EnvironmentFile=-%h/.config/aegis/secrets.env
 
 # --- Sandboxing (the daemon runs LLM-directed tools; confine the blast radius) ---
 NoNewPrivileges=yes
@@ -31,9 +34,11 @@ RestrictRealtime=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
-# ProtectHome=read-only would break tools operating under $HOME; scope writable
-# paths to the XDG dirs Aegis actually uses instead.
-ReadWritePaths=%h/.config/aegis %h/.local/share/aegis %h/.local/state/aegis %h/.cache/aegis
+# Tool packs (write/git/shell) default to sandboxing under tools.working_directory
+# (often $HOME). ProtectSystem=strict makes the tree read-only unless listed here.
+# %h keeps home writable for those tools; Aegis XDG dirs are included explicitly
+# for clarity. Tighten ReadWritePaths to a project dir if you want a narrower jail.
+ReadWritePaths=%h %h/.config/aegis %h/.local/share/aegis %h/.local/state/aegis %h/.cache/aegis
 
 [Install]
 WantedBy=default.target

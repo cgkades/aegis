@@ -47,3 +47,17 @@ def test_confirm_speech_requires_energy() -> None:
     confirmed = gate.process_audio(loud)
     assert confirmed is not None
     assert confirmed.phrase == "hey_aegis"
+
+
+def test_confirm_poll_timeout_clears_without_audio() -> None:
+    """Starved capture (no frames) must still expire the confirm window."""
+    import time
+
+    gate = ConfirmSpeechGate(timeout_s=0.05, sample_rate_hz=16000)
+    event = WakeEvent(phrase="hey_aegis", score=0.9, engine="mock")
+    assert gate.on_wake(event) is None
+    assert gate.waiting
+    assert gate.poll_timeout() is False
+    time.sleep(0.06)
+    assert gate.poll_timeout() is True
+    assert not gate.waiting

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import signal
 from pathlib import Path
@@ -70,11 +69,12 @@ async def run_argv(
         )
 
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        stdout, stderr, truncated = await asyncio.wait_for(
+            _read_streams_capped(proc, tools.max_output_bytes),
+            timeout=timeout,
+        )
     except TimeoutError:
-        _kill_process_group(proc.pid)
-        with contextlib.suppress(Exception):
-            await proc.wait()
+        await terminate_process(proc)
         return ToolResult(
             output='{"error":"timeout"}',
             is_error=True,
@@ -82,21 +82,74 @@ async def run_argv(
             decision="auto",
             meta={"timeout_s": timeout},
         )
+    except asyncio.CancelledError:
+        await terminate_process(proc)
+        raise
+    except BaseException:
+        await terminate_process(proc)
+        raise
 
     out = stdout.decode("utf-8", errors="replace")
     err = stderr.decode("utf-8", errors="replace")
     combined = out
     if err:
         combined = f"{out}\n[stderr]\n{err}" if out else f"[stderr]\n{err}"
-    combined = _truncate(combined, tools.max_output_bytes)
+    if truncated:
+        combined = _truncate(combined, tools.max_output_bytes)
+        if "…[truncated]" not in combined:
+            combined += "\n…[truncated]"
+    else:
+        combined = _truncate(combined, tools.max_output_bytes)
     is_error = proc.returncode != 0
     return ToolResult(
         output=combined if combined else f"(exit {proc.returncode})",
         is_error=is_error,
         risk=risk,
         decision="auto",
-        meta={"exit_code": proc.returncode, "argv": argv},
+        meta={"exit_code": proc.returncode, "argv": argv, "truncated": truncated},
     )
+
+
+async def _read_streams_capped(
+    proc: asyncio.subprocess.Process,
+    max_bytes: int,
+) -> tuple[bytes, bytes, bool]:
+    """Read stdout/stderr with a combined hard byte cap; kill if exceeded."""
+    assert proc.stdout is not None and proc.stderr is not None
+    out_buf = bytearray()
+    err_buf = bytearray()
+    total = 0
+    truncated = False
+    chunk_size = 8192
+
+    async def _pump(stream: asyncio.StreamReader, store: bytearray) -> None:
+        nonlocal total, truncated
+        while True:
+            chunk = await stream.read(chunk_size)
+            if not chunk:
+                return
+            if truncated:
+                continue
+            room = max_bytes - total
+            if room <= 0:
+                truncated = True
+                _kill_process_group(proc.pid)
+                continue
+            if len(chunk) > room:
+                store.extend(chunk[:room])
+                total += room
+                truncated = True
+                _kill_process_group(proc.pid)
+            else:
+                store.extend(chunk)
+                total += len(chunk)
+
+    await asyncio.gather(
+        _pump(proc.stdout, out_buf),
+        _pump(proc.stderr, err_buf),
+        proc.wait(),
+    )
+    return bytes(out_buf), bytes(err_buf), truncated
 
 
 def _kill_process_group(pid: int | None) -> None:
@@ -109,6 +162,37 @@ def _kill_process_group(pid: int | None) -> None:
             os.kill(pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError, OSError):
             pass
+
+
+async def terminate_process(
+    proc: asyncio.subprocess.Process,
+    *,
+    cleanup_timeout_s: float = 1.0,
+) -> None:
+    """Kill a process group and boundedly drain its pipes.
+
+    ``Process.wait()`` can remain pending after a cancelled ``communicate()`` if
+    buffered stdout/stderr is no longer being consumed. Draining both streams
+    keeps cancellation and timeout cleanup from wedging the serial tool loop.
+    """
+    _kill_process_group(proc.pid)
+
+    async def _drain(stream: asyncio.StreamReader | None) -> None:
+        if stream is not None:
+            await stream.read()
+
+    async def _wait_and_drain() -> None:
+        await asyncio.gather(
+            proc.wait(),
+            _drain(getattr(proc, "stdout", None)),
+            _drain(getattr(proc, "stderr", None)),
+            return_exceptions=True,
+        )
+
+    try:
+        await asyncio.wait_for(_wait_and_drain(), timeout=cleanup_timeout_s)
+    except TimeoutError:
+        log.warning("process cleanup timed out pid=%s", proc.pid)
 
 
 def _truncate(text: str, max_bytes: int) -> str:

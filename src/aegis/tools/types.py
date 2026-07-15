@@ -36,6 +36,19 @@ class PolicyResult:
 
 @dataclass(slots=True)
 class ToolResult:
+    """Result of a tool handler.
+
+    Lifecycle notes for ``is_error`` / ``decision`` / ``meta``:
+
+    * **needs_approval**: intermediate local-only state. ``decision="prompt"``,
+      ``meta["needs_approval"]=True``, and ``is_error=True`` by convention so
+      naive consumers fail closed. The tool loop does **not** send this payload
+      to the model; it re-dispatches after human/IPC approval or sends a final
+      denial. Prefer checking ``meta.get("needs_approval")`` over ``is_error``.
+    * **deny / error**: final result returned to the model (``is_error=True``).
+    * **auto / ok**: final success (``is_error=False``).
+    """
+
     output: str
     is_error: bool = False
     risk: RiskClass | None = None

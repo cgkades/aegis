@@ -1,6 +1,8 @@
 """Tool approval modes and prompts."""
 
+from aegis.approval.broker import ApprovalBroker
 from aegis.approval.modes import (
+    ApprovalHandler,
     ApprovalRequest,
     ApprovalResponse,
     denial_payload,
@@ -9,6 +11,8 @@ from aegis.approval.modes import (
 )
 
 __all__ = [
+    "ApprovalBroker",
+    "ApprovalHandler",
     "ApprovalRequest",
     "ApprovalResponse",
     "denial_payload",

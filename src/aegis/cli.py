@@ -316,7 +316,13 @@ def doctor_cmd(ctx: click.Context, idle_profile: bool, seconds: float) -> None:
         sys.exit(1)
 
     key = resolve_api_key(env_var=cfg.openai.api_key_env, secrets_file=paths.secrets_env)
-    click.echo(f"  api_key:     {'set' if key else 'MISSING (' + cfg.openai.api_key_env + ')'}")
+    if key:
+        click.echo(f"  api_key:     set ({cfg.openai.api_key_env})")
+    else:
+        click.echo(
+            f"  api_key:     MISSING ({cfg.openai.api_key_env}) — "
+            "cloud sessions need this; daemon may still start (configure secrets.env)"
+        )
 
     if sounddevice_available():
         devices = list_devices()
@@ -326,15 +332,40 @@ def doctor_cmd(ctx: click.Context, idle_profile: bool, seconds: float) -> None:
         click.echo(f"  inputs:      {len(inputs)}")
         click.echo(f"  outputs:     {len(outputs)}")
     else:
-        click.echo("  sounddevice: not installed (uv sync --extra audio)")
+        click.echo(
+            "  sounddevice: not installed (uv sync --extra audio) — "
+            "required for mic capture / always-on wake"
+        )
 
-    # Wake
-    try:
-        import openwakeword  # noqa: F401
+    # Wake stack readiness (defaults target openwakeword + hey_aegis, which need
+    # a custom model on Python 3.12+; porcupine is the installable alternative).
+    if not cfg.wake.enabled:
+        click.echo("  wake:        disabled in config")
+    else:
+        eng = cfg.wake.engine.value
+        click.echo(f"  wake:        enabled engine={eng} phrase={cfg.wake.phrase!r}")
+        try:
+            import openwakeword  # noqa: F401
 
-        click.echo("  openwakeword: installed")
-    except Exception:
-        click.echo("  openwakeword: not installed (optional)")
+            oww = "installed"
+        except Exception:
+            oww = "not installed (no wheels for many 3.12+ envs; see docs)"
+        click.echo(f"  openwakeword: {oww}")
+        try:
+            import pvporcupine  # noqa: F401
+
+            click.echo("  porcupine:   installed")
+        except Exception:
+            click.echo("  porcupine:   not installed (uv sync --extra porcupine)")
+        if (
+            eng == "openwakeword"
+            and cfg.wake.phrase == "hey_aegis"
+            and not cfg.wake.custom_model_path
+        ):
+            click.echo(
+                "  wake_note:   hey_aegis requires wake.custom_model_path "
+                "(built-in openwakeword models are hey_jarvis only)"
+            )
 
     reg = build_registry(cfg)
     click.echo(f"  tools:       {', '.join(reg.names()) or '(none)'}")

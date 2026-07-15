@@ -9,7 +9,8 @@ max_session_cost_usd = 3.0
 reasoning_effort = "low"
 
 [tools]
-enabled = ["fs", "git", "process"]
+# Matches profiles.py STANDARD overlay (write pack included).
+enabled = ["fs", "git", "process", "write"]
 
 [tools.shell]
 enabled = false

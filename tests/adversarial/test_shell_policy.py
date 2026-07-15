@@ -46,6 +46,39 @@ def test_kubectl_always_denied_via_shell() -> None:
     assert "kubectl" in r.reason or "reserved" in r.reason
 
 
+def test_absolute_kubectl_path_denied(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import patch
+
+    with patch(
+        "aegis.tools.policy._resolve_executable",
+        return_value="/usr/bin/kubectl",
+    ):
+        r = evaluate_run_command(["/usr/bin/kubectl", "get", "pods"], _tools())
+    assert r.decision is PolicyDecision.DENY
+
+
+def test_symlink_escape_read_denied(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    link = work / "escape"
+    link.symlink_to(outside)
+    from aegis.tools.policy import evaluate_read_file
+
+    # Reading the symlink resolves outside workdir → sandbox deny
+    tools = _tools(workdir=str(work))
+    r = evaluate_read_file(str(link), tools)
+    assert r.decision is PolicyDecision.DENY
+    assert r.reason == "sandbox"
+
+
+def test_flag_allowlist_denies_unknown_ls_flag() -> None:
+    r = evaluate_run_command(["ls", "--almost-all"], _tools())
+    # --almost-all not in default ls allowlist
+    assert r.decision is PolicyDecision.DENY
+
+
 def test_sudo_denied() -> None:
     r = evaluate_run_command(["sudo", "ls"], _tools())
     assert r.decision is PolicyDecision.DENY

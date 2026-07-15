@@ -52,6 +52,66 @@ def save_config(cfg: AegisConfig, path: Path) -> Path:
     return path
 
 
+_MISSING = object()
+
+
+def _leaf_paths(value: object, prefix: tuple[str, ...] = ()) -> set[tuple[str, ...]]:
+    if not isinstance(value, dict):
+        return {prefix}
+    paths: set[tuple[str, ...]] = set()
+    for key, child in value.items():
+        paths.update(_leaf_paths(child, (*prefix, key)))
+    return paths
+
+
+def _get_path(data: dict[str, Any], path: tuple[str, ...]) -> object:
+    current: object = data
+    for key in path:
+        if not isinstance(current, dict) or key not in current:
+            return _MISSING
+        current = current[key]
+    return current
+
+
+def _set_path(data: dict[str, Any], path: tuple[str, ...], value: object) -> None:
+    current = data
+    for key in path[:-1]:
+        child = current.get(key)
+        if not isinstance(child, dict):
+            child = {}
+            current[key] = child
+        current = child
+    current[path[-1]] = value
+
+
+def _switch_profile_defaults(data: dict[str, Any], cfg: AegisConfig, profile: str) -> None:
+    """Apply only profile-owned defaults that the user has not overridden."""
+    from aegis.config.load import build_config
+    from aegis.config.profiles import profile_overlay
+    from aegis.config.schema import ProfileName
+
+    target = ProfileName(profile)
+    if target is cfg.profile.name:
+        return
+
+    current_baseline = build_config({}, profile=cfg.profile.name).model_dump(mode="json")
+    target_baseline = build_config({}, profile=target).model_dump(mode="json")
+    managed_paths = _leaf_paths(profile_overlay(cfg.profile.name)) | _leaf_paths(
+        profile_overlay(target)
+    )
+    managed_paths.discard(("profile", "name"))
+
+    for path in managed_paths:
+        current = _get_path(data, path)
+        old_default = _get_path(current_baseline, path)
+        if current is not _MISSING and current == old_default:
+            new_default = _get_path(target_baseline, path)
+            if new_default is not _MISSING:
+                _set_path(data, path, new_default)
+
+    data.setdefault("profile", {})["name"] = target.value
+
+
 def apply_llm_settings(
     cfg: AegisConfig,
     *,
@@ -93,7 +153,7 @@ def apply_llm_settings(
     """Return a copy of cfg with LLM-related fields updated."""
     data = cfg.model_dump(mode="json")
     if profile is not None:
-        data["profile"]["name"] = profile
+        _switch_profile_defaults(data, cfg, profile)
     if provider is not None:
         data["session"]["provider"] = provider
         data["llm"]["chat_provider"] = provider

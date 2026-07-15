@@ -26,7 +26,9 @@ def test_default_mvp_config() -> None:
     assert cfg.tools.shell.enabled is False
     assert cfg.tools.kubectl.enabled is False
     assert cfg.tools.enabled == ["fs"]
-    assert cfg.wake.engine.value == "openwakeword"
+    assert cfg.wake.enabled is False
+    assert cfg.wake.engine.value == "porcupine"
+    assert "workspace" in cfg.tools.working_directory
     assert cfg.audio.local_vad_enabled is True
 
 
@@ -158,6 +160,15 @@ def test_missing_config_ok_defaults(tmp_path: Path) -> None:
     )
     cfg = load_config(paths=paths, missing_ok=True)
     assert cfg.profile.name is ProfileName.MVP
+    assert cfg.tools.working_directory == str(paths.workspace_dir)
+
+
+def test_legacy_session_grant_scopes_migrate_to_once() -> None:
+    for legacy_scope in ("same_risk_class", "all"):
+        cfg = build_config(
+            {"tools": {"approval": {"session_grant_applies_to": legacy_scope}}}
+        )
+        assert cfg.tools.approval.session_grant_applies_to.value == "once"
 
 
 def test_missing_config_not_ok(tmp_path: Path) -> None:

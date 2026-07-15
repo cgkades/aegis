@@ -60,6 +60,19 @@ class ConfirmSpeechGate:
             return event
         return None
 
+    def poll_timeout(self) -> bool:
+        """Clear and return True if the confirm window expired without audio.
+
+        Call this when capture yields no frames so a starved mic cannot leave
+        the gate stuck waiting forever.
+        """
+        if self._pending is None or self._deadline is None:
+            return False
+        if time.monotonic() > self._deadline:
+            self.clear()
+            return True
+        return False
+
     def clear(self) -> None:
         self._pending = None
         self._deadline = None

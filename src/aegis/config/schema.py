@@ -75,10 +75,22 @@ class ApprovalDefault(StrEnum):
 
 
 class SessionGrantScope(StrEnum):
+    """What a CLI "session" grant applies to.
+
+    Only ``same_tool`` is implemented today, and it means *exact argument
+    fingerprint* for *read-risk* tools — not a broad tool-name or risk-class
+    grant. ``once`` means no session grant is stored (single allow only).
+    """
+
     ONCE = "once"
     SAME_TOOL = "same_tool"
-    SAME_RISK_CLASS = "same_risk_class"
-    ALL = "all"
+
+
+def _default_workspace_dir() -> str:
+    """Return the XDG-aware default workspace without import-time evaluation."""
+    from aegis.config.paths import default_paths
+
+    return str(default_paths().workspace_dir)
 
 
 class McpApproval(StrEnum):
@@ -127,9 +139,12 @@ class AudioConfig(BaseModel):
 
 
 class WakeConfig(BaseModel):
-    enabled: bool = True
-    engine: WakeEngine = WakeEngine.OPENWAKEWORD
-    phrase: str = "hey_aegis"
+    # Disabled by default: openwakeword is not installable on many Python 3.12+
+    # hosts, and hey_aegis needs a custom model. Enable after installing an engine
+    # (``uv sync --extra porcupine``) and configuring phrase/model/access key.
+    enabled: bool = False
+    engine: WakeEngine = WakeEngine.PORCUPINE
+    phrase: str = "porcupine"
     threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     custom_model_path: str = ""
     confirm_speech_timeout_s: float = Field(default=1.5, ge=0.0)
@@ -348,9 +363,23 @@ class ToolsSecretsConfig(BaseModel):
 class ToolsApprovalConfig(BaseModel):
     default: ApprovalDefault = ApprovalDefault.AUTO_READONLY
     timeout_s: int = Field(default=60, ge=5)
+    # Reserved for future voice "say confirm" UX — not yet wired.
     voice_confirm_phrase: bool = True
     mute_uplink_during_approval: bool = True
     session_grant_applies_to: SessionGrantScope = SessionGrantScope.SAME_TOOL
+
+    @field_validator("session_grant_applies_to", mode="before")
+    @classmethod
+    def migrate_legacy_grant_scope(cls, value: object) -> object:
+        """Safely accept scopes emitted by older Aegis configurations.
+
+        Broad grants were never safe to implement for model-directed tools. Keep
+        existing installs bootable by narrowing the retired values to one-shot
+        approval; saving the config then persists the supported value.
+        """
+        if value in {"same_risk_class", "all"}:
+            return SessionGrantScope.ONCE.value
+        return value
 
 
 class ToolsGitConfig(BaseModel):
@@ -376,13 +405,16 @@ class ToolsKubectlConfig(BaseModel):
 
 class ToolsConfig(BaseModel):
     enabled: list[str] = Field(default_factory=lambda: ["fs"])
-    working_directory: str = "~"
+    # Least-privilege default: a dedicated workspace under XDG data, not all of $HOME.
+    working_directory: str = Field(default_factory=_default_workspace_dir)
     sandbox_to_workdir: bool = True
     max_output_bytes: int = Field(default=100_000, ge=1024)
+    max_write_bytes: int = Field(default=500_000, ge=1024)
     default_timeout_s: int = Field(default=30, ge=1)
     max_tool_calls_per_turn: int = Field(default=8, ge=1)
     max_tool_calls_per_session: int = Field(default=64, ge=1)
-    parallel_read_tools: bool = True
+    # Reserved — tool loop is serial today; field kept for forward config compat.
+    parallel_read_tools: bool = False
     shell: ToolsShellConfig = Field(default_factory=ToolsShellConfig)
     secrets: ToolsSecretsConfig = Field(default_factory=ToolsSecretsConfig)
     approval: ToolsApprovalConfig = Field(default_factory=ToolsApprovalConfig)
@@ -477,7 +509,9 @@ class PrivacyConfig(BaseModel):
 
 
 class ObservabilityConfig(BaseModel):
+    # In-process session metrics/logging only — no Prometheus exporter.
     metrics_enabled: bool = True
+    # Unused; kept so older configs validate. Prefer journal/stderr logs.
     metrics_bind: str | None = None
 
 
