@@ -194,11 +194,10 @@ missing-token / bad-Host, and to check keys land in secrets.env.
 
 ## Notes for first real run (needs live credentials — can't verify offline)
 
-- **SE-H7**: the Realtime `session.update` payload + default model id
-  `gpt-realtime-2.1-mini` were never tested against the live API. Verify the model
-  id and payload shape against current OpenAI Realtime docs before the first real
-  voice session; expect to adjust `voice/realtime.py:_send_session_update` and the
-  `session.model` default.
+- ~~**SE-H7**: the Realtime `session.update` payload + default model id
+  `gpt-realtime-2.1-mini` were never tested against the live API.~~ Resolved in
+  Round 3 (2026-07-27): the payload was still the retired beta wire format.
+  See below.
 - **SE-M11**: `chatgpt_oauth` provider endpoints are speculative; treat as experimental.
 - **SE-H6**: openwakeword can't be pip-installed on py3.12 (tflite-runtime). Either
   install it in a compatible env, use the `porcupine` extra + a keyword file, or run
@@ -250,3 +249,57 @@ test; it was a masked test failure, not an application warning.
 - `uv run ruff check src tests`: clean.
 - `uv run aegis session once --backend mock`: clean end-to-end session.
 - `uv run aegis doctor`: completed; idle-cloud invariant passed.
+
+## Round 3 — first-real-run verification (2026-07-27)
+
+Prompted by SE-H7 ("verify the Realtime payload against live docs before first
+run") — checked against OpenAI's current Realtime API docs instead of assuming
+the beta-era shape still held.
+
+### Findings
+
+| ID | Severity | Location | Issue |
+| --- | --- | --- | --- |
+| R3-C1 | Critical | `voice/realtime.py:_send_session_update`, `connect` | OpenAI retired the Realtime beta interface on 2026-05-07. The adapter still sent the beta wire format exclusively: flat `modalities`/`voice`/`input_audio_format`/`output_audio_format`/`turn_detection`/`input_audio_transcription` fields and the `OpenAI-Beta: realtime=v1` header. Against the live GA endpoint the handshake is rejected outright — every real voice session would fail to connect. |
+| R3-M1 | Medium | `session/runner.py` (`run_session_once`) | `MockVoiceSession.connect()` scripts and auto-ends its entire reply synchronously before returning. The uplink task was started unconditionally whenever a real `AudioGraph` was attached, so on real hardware it raced a captured frame against an already-disconnected mock and raised an unhandled `RuntimeError` from `_uplink_loop`, logged as an ERROR-level traceback on effectively every `aegis session once --backend mock` run (exit code stayed 0, so it wasn't caught by anything checking only the return code). |
+| R3-T1 | — | `tests/unit/test_realtime_adapter.py` | The only assertion on the outbound handshake was `any(s.get("type") == "session.update" for s in fake.sent)` — true for any payload shape, including a wrong one. It would not have caught R3-C1. |
+| R3-T2 | — | `tests/unit/test_runner_more.py` and friends | Every runner test forces `graph=None` via `sounddevice_available=False`, so `_uplink_loop` never actually runs in CI — which is exactly why R3-M1 was invisible to the suite despite 405 tests passing. |
+
+### Fixes applied
+
+- **R3-C1** `voice/realtime.py`: rewrote `_send_session_update` to the GA shape —
+  `session.type: "realtime"`, `output_modalities: ["audio"]`, and audio settings
+  nested under `session.audio.input` (`format`, `transcription`, `turn_detection`)
+  and `session.audio.output` (`format`, `voice`), with format expressed as
+  `{"type": "audio/pcm", "rate": 24000}` (matching `AudioConfig.session_sample_rate_hz`,
+  which is what the audio pipeline actually captures/plays at). Dropped the
+  `OpenAI-Beta` header, which GA rejects. Confirmed `gpt-realtime-2.1-mini`
+  (default model) and `alloy` (default voice) are still valid GA identifiers.
+  Server-side event handling was already GA-compatible (it accepted both
+  `response.audio.delta`/`response.output_audio.delta` name variants), so no
+  changes were needed there.
+- **R3-M1** `session/runner.py`: the uplink task is no longer started when
+  `backend == "mock"` — mock never consumes uplink audio by design, so there's
+  nothing to race.
+- **R3-T1** `tests/unit/test_realtime_adapter.py`: replaced the type-only
+  assertion with a full pin of the GA `session.update` body (session type,
+  output_modalities, nested audio.input/output shape, absence of the old flat
+  beta fields) and asserted the `OpenAI-Beta` header is not sent.
+- **R3-T2** `tests/unit/test_review_regressions.py`: added
+  `test_mock_backend_with_real_graph_has_no_uplink_race`, which passes a real
+  (non-null, fake-hardware) `AudioGraph`-shaped object into `run_session_once`
+  instead of forcing `graph=None`, reproducing R3-M1 deterministically. Verified
+  it fails against the pre-fix code and passes after.
+
+### Verification
+
+- `uv run pytest`: 406 passed, coverage 85.18% (gate: 80%).
+- `uv run ruff check src tests`: clean.
+- `uv run aegis session once --backend mock` on real hardware: clean end-to-end
+  session, no ERROR-level output (previously printed an unhandled-RuntimeError
+  traceback every run — see R3-M1).
+- `uv run aegis doctor`: completed; idle-cloud invariant passed.
+- Live Realtime API connectivity (real `OPENAI_API_KEY`, actual handshake) is
+  still unverified — this pass fixed the payload against current documentation
+  but no live call was made. Recommend one real `aegis session start` before
+  relying on it.

@@ -99,10 +99,7 @@ class RealtimeVoiceSession:
         try:
             self._ws = await websockets.connect(
                 url,
-                additional_headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "OpenAI-Beta": "realtime=v1",
-                },
+                additional_headers={"Authorization": f"Bearer {self._api_key}"},
                 max_size=16 * 1024 * 1024,
             )
         except BaseException:
@@ -118,25 +115,35 @@ class RealtimeVoiceSession:
         await asyncio.sleep(0.05)
 
     async def _send_session_update(self, config: SessionConfig) -> None:
-        # Structural payload; OpenAI docs are normative for exact fields.
+        # GA wire format (beta interface + OpenAI-Beta header were retired
+        # 2026-05-07): audio settings nest under session.audio.{input,output}
+        # instead of flat fields, and modalities -> output_modalities.
+        # Rate is fixed at 24kHz PCM16 to match AudioConfig.session_sample_rate_hz,
+        # which is what the audio pipeline actually captures/plays at.
         session: dict[str, Any] = {
-            "modalities": ["audio", "text"],
+            "type": "realtime",
+            "model": config.model,
+            "output_modalities": ["audio"],
             "instructions": self._instructions,
-            "voice": config.voice,
-            "input_audio_format": "pcm16",
-            "output_audio_format": "pcm16",
-            "input_audio_transcription": {"model": "gpt-4o-mini-transcribe"},
-            "turn_detection": {
-                "type": "server_vad",
-                "threshold": 0.5,
-                "prefix_padding_ms": 300,
-                "silence_duration_ms": 500,
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "transcription": {"model": "gpt-4o-mini-transcribe"},
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 500,
+                    },
+                },
+                "output": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "voice": config.voice,
+                },
             },
             "tools": self._tools,
             "tool_choice": "auto",
         }
-        # Model may be set via query; include if API accepts in session body
-        session["model"] = config.model
         await self._send({"type": "session.update", "session": session})
 
     async def send_audio(self, pcm16_24k_mono: bytes) -> None:

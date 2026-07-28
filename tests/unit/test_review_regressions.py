@@ -438,3 +438,60 @@ async def test_runner_does_not_install_signal_handlers_when_disabled(
     # Daemon path: the runner must not touch SIGINT/SIGTERM on the shared loop.
     assert signal.SIGINT not in added
     assert signal.SIGTERM not in added
+
+
+# --------------------------------------------------------------------------- #
+# Mock backend + a real (non-null) AudioGraph: mock.connect() scripts and
+# auto-ends its whole reply synchronously, before the uplink task's first
+# capture.read() even returns. Every test above passes graph=None (via
+# sounddevice_available=False), which never starts the uplink loop and so
+# never exercises this path — exactly the gap this file's docstring warns
+# about. `aegis session once --backend mock` on real hardware hits it every
+# time: the uplink loop calls session.send_audio() on an already-disconnected
+# mock, which used to surface as an unhandled RuntimeError + ERROR-level
+# traceback even though the CLI exit code stayed 0.
+# --------------------------------------------------------------------------- #
+class _FakeCapture:
+    def read(self, timeout: float) -> np.ndarray:
+        return np.zeros(480, dtype=np.int16)
+
+
+class _FakeGraph:
+    def __init__(self) -> None:
+        self.capture = _FakeCapture()
+
+    def uplink_frame(self, frame: np.ndarray) -> np.ndarray:
+        return frame
+
+    def play_session_audio(self, pcm: np.ndarray) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_mock_backend_with_real_graph_has_no_uplink_race(
+    paths: AegisPaths, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    from aegis.session import runner as runner_mod
+
+    cfg = build_config(
+        {
+            "activation": {
+                "chime_on_wake": False,
+                "chime_on_connecting": False,
+                "chime_on_end": False,
+            }
+        }
+    )
+    with caplog.at_level(logging.ERROR):
+        code = await runner_mod.run_session_once(
+            cfg,
+            backend="mock",
+            paths=paths,
+            graph=_FakeGraph(),
+            max_seconds=2,
+            install_signal_handlers=False,
+        )
+    assert code == 0
+    assert "uplink failed" not in caplog.text

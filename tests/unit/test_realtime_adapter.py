@@ -79,13 +79,43 @@ async def test_realtime_connect_send_audio_and_events() -> None:
         tools=[{"type": "function", "name": "list_dir", "parameters": {}}],
     )
 
+    connect_kwargs: dict[str, Any] = {}
+
     async def fake_connect(*args, **kwargs):
+        connect_kwargs.update(kwargs)
         return fake
 
     with patch("aegis.voice.realtime.websockets.connect", side_effect=fake_connect):
-        await session.connect(SessionConfig(model="gpt-realtime-2.1-mini"))
-        # Gateway registers on connect; may close when fake WS iterator ends.
-        assert any(s.get("type") == "session.update" for s in fake.sent)
+        await session.connect(
+            SessionConfig(model="gpt-realtime-2.1-mini", voice="marin")
+        )
+
+        # GA handshake: the beta interface (OpenAI-Beta header) was retired
+        # 2026-05-07 and the GA endpoint rejects it outright.
+        headers = connect_kwargs.get("additional_headers", {})
+        assert headers.get("Authorization") == "Bearer sk-test"
+        assert "OpenAI-Beta" not in headers
+
+        # Pin the actual GA session.update wire shape, not just "something was
+        # sent" — a regression back to the old flat beta fields (modalities,
+        # top-level voice/input_audio_format/turn_detection) must fail here.
+        updates = [s for s in fake.sent if s.get("type") == "session.update"]
+        assert updates, "no session.update sent"
+        sent_session = updates[0]["session"]
+        assert sent_session["type"] == "realtime"
+        assert sent_session["model"] == "gpt-realtime-2.1-mini"
+        assert sent_session["output_modalities"] == ["audio"]
+        assert "modalities" not in sent_session
+        assert "voice" not in sent_session
+        assert "input_audio_format" not in sent_session
+        assert "turn_detection" not in sent_session
+        audio = sent_session["audio"]
+        assert audio["input"]["format"] == {"type": "audio/pcm", "rate": 24000}
+        assert audio["input"]["turn_detection"]["type"] == "server_vad"
+        assert audio["input"]["transcription"]["model"] == "gpt-4o-mini-transcribe"
+        assert audio["output"]["format"] == {"type": "audio/pcm", "rate": 24000}
+        assert audio["output"]["voice"] == "marin"
+
         # If still connected, exercise send paths
         try:
             await session.send_audio(pcm)
@@ -101,7 +131,6 @@ async def test_realtime_connect_send_audio_and_events() -> None:
             pass
         await session.end()
 
-    assert any(s.get("type") == "session.update" for s in fake.sent)
     # end is idempotent regarding gateway close
     assert not gw.is_open or gw.active_sessions >= 0
 

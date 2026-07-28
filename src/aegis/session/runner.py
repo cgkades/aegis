@@ -231,7 +231,11 @@ async def run_session_once(
                     loop.add_signal_handler(sig, stop.set)
                     installed_signals.append(sig)
 
-        if graph is not None:
+        if graph is not None and not auto_end_mock:
+            # The mock backend scripts and auto-ends its whole reply inside
+            # connect(), before this task would get a chance to run — it never
+            # consumes uplink audio, so starting the loop only races a real
+            # capture frame against an already-disconnected mock.send_audio().
             uplink_task = asyncio.create_task(
                 _uplink_loop(session, graph, machine, stop),
                 name="uplink",
