@@ -13,6 +13,11 @@ from aegis.util.logging import get_logger
 
 log = get_logger("mcp.stdio")
 
+# JSON-RPC responses are newline-delimited, so one tool result is one line.
+# asyncio's default StreamReader limit is 64 KiB, below the ~100 KB the bridge
+# is willing to accept — readline() would raise ValueError and kill the reader.
+_STDOUT_LIMIT_BYTES = 4 * 1024 * 1024
+
 
 @dataclass
 class McpToolInfo:
@@ -55,6 +60,7 @@ class McpStdioClient:
         self._proc = await asyncio.create_subprocess_exec(
             self.command,
             *self.args,
+            limit=_STDOUT_LIMIT_BYTES,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
@@ -68,7 +74,9 @@ class McpStdioClient:
     async def close(self) -> None:
         if self._reader_task:
             self._reader_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            # A reader that already died with an exception re-raises it here,
+            # which would skip terminate() below and orphan the child process.
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._reader_task
         self._fail_pending("client closed")
         if self._proc:
@@ -122,14 +130,22 @@ class McpStdioClient:
         log.info("mcp %s tools: %s", self.name, [t.name for t in self._tools])
 
     async def _request(self, method: str, params: dict[str, Any]) -> Any:
+        if self._reader_task is not None and self._reader_task.done():
+            # Reader is gone; nothing will ever resolve this. Fail now instead
+            # of stalling the serial tool loop for the full timeout.
+            raise ConnectionError(f"mcp {self.name}: transport closed")
         self._id += 1
         req_id = self._id
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[Any] = loop.create_future()
         self._pending[req_id] = fut
         msg = {"jsonrpc": "2.0", "id": req_id, "method": method, "params": params}
-        await self._write(msg)
-        return await asyncio.wait_for(fut, timeout=60)
+        try:
+            await self._write(msg)
+            return await asyncio.wait_for(fut, timeout=60)
+        finally:
+            # wait_for cancels fut on timeout but leaves the entry behind.
+            self._pending.pop(req_id, None)
 
     async def _notify(self, method: str, params: dict[str, Any]) -> None:
         await self._write({"jsonrpc": "2.0", "method": method, "params": params})
@@ -147,7 +163,14 @@ class McpStdioClient:
         stdout = self._proc.stdout
         try:
             while True:
-                line = await stdout.readline()
+                try:
+                    line = await stdout.readline()
+                except (ValueError, asyncio.LimitOverrunError) as exc:
+                    # Line exceeded the stream limit; the buffer position is no
+                    # longer trustworthy, so give up on this transport loudly
+                    # rather than silently going deaf.
+                    log.error("mcp %s: oversized response line: %s", self.name, exc)
+                    break
                 if not line:
                     break
                 try:

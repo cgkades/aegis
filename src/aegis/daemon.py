@@ -27,7 +27,11 @@ from aegis.ipc import (
 )
 from aegis.session.events import SessionState, Trigger
 from aegis.session.machine import SessionMachine
-from aegis.session.runner import TEXT_ONLY_BACKENDS, run_session_once
+from aegis.session.runner import (
+    TEXT_ONLY_BACKENDS,
+    UNIMPLEMENTED_BACKENDS,
+    run_session_once,
+)
 from aegis.util.logging import get_logger, setup_logging
 from aegis.voice.gateway import default_gateway
 from aegis.wake import ConfirmSpeechGate
@@ -35,6 +39,10 @@ from aegis.wake.base import WakeEngine
 from aegis.wake.factory import create_wake_engine
 
 log = get_logger("daemon")
+
+# Capture reads time out after 0.2s, so this is ~30s of uninterrupted silence
+# before we call the input stream degraded.
+_SILENT_READS_BEFORE_DEGRADED = 150
 
 
 @dataclass(slots=True)
@@ -69,6 +77,7 @@ class AegisDaemon:
         self._wake_lock = threading.RLock()
         self._wake_generation = 0
         self._wake_config_restart_required = False
+        self._silent_reads = 0
         self._confirm = ConfirmSpeechGate(
             timeout_s=cfg.wake.confirm_speech_timeout_s,
             sample_rate_hz=cfg.audio.wake_sample_rate_hz,
@@ -76,6 +85,7 @@ class AegisDaemon:
         self.audit = AuditLogger(
             paths.audit_dir,
             redact=cfg.privacy.redact_secrets_in_audit,
+            retention_days=cfg.privacy.audit_retention_days,
         )
         self.approvals = ApprovalBroker(timeout_s=cfg.tools.approval.timeout_s)
 
@@ -113,7 +123,12 @@ class AegisDaemon:
                 # unused output stream open 24/7 blocks device power-down.
                 self._graph.start(capture_only=True)
             except Exception as exc:
-                log.warning("capture unavailable: %s", exc)
+                # Wake is enabled but there is no microphone: the daemon is
+                # running deaf. Error level, because "started fine" in the
+                # journal is how this goes unnoticed for days. Under systemd,
+                # MemoryDenyWriteExecute=yes is a known cause on distros whose
+                # libffi lacks static trampolines (sounddevice uses cffi).
+                log.error("capture unavailable — wake word will not work: %s", exc)
                 self._graph = None
 
         # Restrict the socket's permissions from creation (not just after) so there
@@ -194,7 +209,19 @@ class AegisDaemon:
                 with self._wake_lock:
                     if self._confirm.waiting and self._confirm.poll_timeout():
                         log.info("wake confirm timed out (no audio frames)")
+                # A dead capture stream (device unplug, PipeWire restart,
+                # suspend/resume) looks exactly like silence from here, so count
+                # the drought and say so — otherwise wake goes deaf while
+                # `aegis status` still reports it enabled.
+                self._silent_reads += 1
+                if self._silent_reads == _SILENT_READS_BEFORE_DEGRADED:
+                    log.error(
+                        "no audio frames for ~%.0fs — capture stream may be dead; "
+                        "wake word will not trigger until the daemon is restarted",
+                        _SILENT_READS_BEFORE_DEGRADED * 0.2,
+                    )
                 continue
+            self._silent_reads = 0
 
             # Resample + KWS off the event loop so IPC stays responsive (F018).
             try:
@@ -257,6 +284,7 @@ class AegisDaemon:
             self.audit = AuditLogger(
                 self.paths.audit_dir,
                 redact=cfg.privacy.redact_secrets_in_audit,
+                retention_days=cfg.privacy.audit_retention_days,
             )
             log.info("config reloaded profile=%s", cfg.profile.name.value)
             return ConfigReloadResult(cfg, restart_required=restart_required)
@@ -279,11 +307,20 @@ class AegisDaemon:
             }
         cfg = reload_result.cfg
         provider = str(cfg.session.provider.value)
-        if provider.lower().replace("-", "_") in TEXT_ONLY_BACKENDS:
+        normalized = provider.lower().replace("-", "_")
+        if normalized in TEXT_ONLY_BACKENDS:
             return {
                 "started": False,
                 "reason": f"text_only_provider:{provider}",
-                "hint": "set session.provider to realtime, mock, or gpt_live",
+                "hint": "set session.provider to realtime or mock",
+            }
+        if normalized in UNIMPLEMENTED_BACKENDS:
+            # connect() raises NotImplementedError for these, so reporting
+            # started:true would hand the caller a session that is already dead.
+            return {
+                "started": False,
+                "reason": f"provider_not_implemented:{provider}",
+                "hint": "set session.provider to realtime or mock",
             }
 
         # The runner owns its own state machine. The daemon advances its own
@@ -294,7 +331,10 @@ class AegisDaemon:
             skip_confirm=skip_confirm,
         )
         self._wake_generation += 1
-        self.audit.log("session_request", extra={"source": source})
+        # One id for the whole session: the value returned over IPC below is the
+        # same one the runner puts on its tool_call and session_end records.
+        session_id = self.machine.context.session_id
+        self.audit.log("session_request", session_id=session_id, extra={"source": source})
 
         async def _run() -> int:
             try:
@@ -316,6 +356,7 @@ class AegisDaemon:
                     install_signal_handlers=False,
                     interactive_approval=False,
                     approval_handler=self.approvals.request,
+                    session_id=session_id,
                 )
                 return code
             finally:
@@ -341,7 +382,7 @@ class AegisDaemon:
         self._session_task.add_done_callback(self._on_session_done)
         return {
             "started": True,
-            "session_id": self.machine.context.session_id,
+            "session_id": session_id,
             "source": source,
         }
 
@@ -400,6 +441,9 @@ class AegisDaemon:
                     "state": "active" if busy else self.machine.state.value,
                     "session_id": self.machine.context.session_id,
                     "wake_enabled": self._wake is not None and self._graph is not None,
+                    # Wake is configured but no audio has arrived for a while:
+                    # the capture stream is probably dead.
+                    "wake_degraded": self._silent_reads >= _SILENT_READS_BEFORE_DEGRADED,
                     "wake_restart_required": self._wake_config_restart_required,
                     "cloud_open": default_gateway.is_open,
                     "pending_approvals": self.approvals.list_pending(),

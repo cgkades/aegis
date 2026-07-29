@@ -100,6 +100,27 @@ async def handle_tool_call(
             )
             resp = ApprovalResponse(False, reason="non_interactive_no_approval_ui")
 
+        # Record the human decision. A denial never reaches registry.dispatch,
+        # and an allow is indistinguishable there from an unattended auto-run,
+        # so without this the audit trail cannot answer "who said yes?".
+        if registry.audit is not None:
+            registry.audit.log(
+                "approval_resolved",
+                session_id=session_id,
+                tool_name=call.name,
+                decision="allow" if resp.allowed else "deny",
+                risk=result.risk or "unknown",
+                args_summary=_approval_summary(call.arguments),
+                call_id=call.call_id,
+                reason=resp.reason or None,
+                grant_scope=resp.grant_scope or None,
+                source=(
+                    "ipc"
+                    if approval_handler is not None
+                    else ("cli" if interactive_approval else "auto_deny")
+                ),
+            )
+
         if not resp.allowed:
             result = result_from_denial(resp.reason or "denied")
             machine.trigger(Trigger.APPROVAL_DENY, tool=call.name)

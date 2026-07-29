@@ -69,6 +69,12 @@ class ToolSpec:
     timeout_s: int | None = None
     source: str = "builtin"
     env_allowlist: tuple[str, ...] = ()
+    # True when the handler derives the real risk class per call (run_command
+    # from the argv policy, kubectl from the verb) and therefore owns its own
+    # approval decision. Everything else is gated centrally in
+    # ToolRegistry.dispatch under auto_readonly, so a handler that forgets to
+    # check ``approved`` cannot silently auto-execute a write.
+    dynamic_risk: bool = False
 
 
 # Normative OpenAI schema for run_command

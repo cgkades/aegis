@@ -62,11 +62,12 @@ def test_git_with_readonly_rules_status(tmp_path: Path):
         git=ToolsGitConfig(deny_via_shell=True, shell_readonly_rules=True),
     )
     r = evaluate_run_command(["git", "status"], t)
-    # either auto if git resolves under allowed dirs, or unknown_executable
-    assert r.reason in {
-        "ok",
-        "unknown_executable",
-        "no_rule",
-        "use_structured_git",
-        "git_verb_not_readonly",
-    } or r.decision in {PolicyDecision.AUTO, PolicyDecision.DENY, PolicyDecision.PROMPT}
+    # `git status` is read-only, so shell_readonly_rules must let it through
+    # rather than bouncing it to the structured tool — unless git isn't on this
+    # host's allowed executable dirs at all.
+    if r.reason == "unknown_executable":
+        assert r.decision is PolicyDecision.DENY
+    else:
+        assert r.reason == "ok"
+        assert r.decision is PolicyDecision.AUTO
+        assert r.risk == "read"

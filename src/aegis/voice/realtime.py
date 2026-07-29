@@ -83,6 +83,9 @@ class RealtimeVoiceSession:
         self._function_arg_overflows: set[str] = set()
         self._function_arg_total_bytes = 0
         self._usage = UsageSnapshot()
+        # The legacy wire sends both transcript deltas and a full-text `.done`;
+        # forwarding both would store and print every reply twice.
+        self._saw_agent_transcript_delta = False
 
     async def connect(self, config: SessionConfig) -> None:
         if not self._api_key:
@@ -184,8 +187,21 @@ class RealtimeVoiceSession:
         except Exception as exc:
             log.debug("interrupt failed: %s", exc)
 
+    async def _close_ws(self) -> None:
+        if self._ws is None:
+            return
+        try:
+            await self._ws.close()
+        except Exception as exc:
+            log.debug("ws close: %s", exc)
+        self._ws = None
+
     async def end(self) -> None:
         if not self._connected:
+            # The recv loop flips _connected on an unexpected error without
+            # closing the transport. Without this the socket stays open — and
+            # billable — while the gateway already counts the session closed.
+            await self._close_ws()
             return
         # Mark disconnected first so concurrent callers are no-ops. Gateway
         # accounting must run in finally: on Python 3.11+ sticky CancelledError
@@ -199,12 +215,7 @@ class RealtimeVoiceSession:
                 except asyncio.CancelledError:
                     pass
                 self._recv_task = None
-            if self._ws is not None:
-                try:
-                    await self._ws.close()
-                except Exception as exc:
-                    log.debug("ws close: %s", exc)
-                self._ws = None
+            await self._close_ws()
             # Best-effort terminal events; do not let cancel skip register_close.
             for event in (
                 VoiceEvent(type=VoiceEventType.USAGE, usage=self._usage),
@@ -282,8 +293,11 @@ class RealtimeVoiceSession:
         finally:
             self._clear_function_arg_buffers()
             if self._connected:
-                # Unexpected close
+                # Unexpected close. The transport may still be healthy (the
+                # error can come from event handling, not the socket), so close
+                # it here — end() will short-circuit on _connected being False.
                 self._connected = False
+                await self._close_ws()
                 await self._put_event(
                     VoiceEvent(type=VoiceEventType.ERROR, message="connection closed")
                 )
@@ -316,12 +330,17 @@ class RealtimeVoiceSession:
                 )
             return
 
+        if etype == "input_audio_buffer.speech_started":
+            await self._put_event(VoiceEvent(type=VoiceEventType.USER_TURN_STARTED))
+            return
+
         if etype in {
             "response.audio_transcript.delta",
             "response.output_audio_transcript.delta",
         }:
             text = msg.get("delta") or ""
             if text:
+                self._saw_agent_transcript_delta = True
                 await self._put_event(
                     VoiceEvent(type=VoiceEventType.AGENT_TRANSCRIPT, text=text)
                 )
@@ -336,10 +355,15 @@ class RealtimeVoiceSession:
                 await self._put_event(
                     VoiceEvent(type=VoiceEventType.USER_TRANSCRIPT, text=text)
                 )
-            elif text:
-                await self._put_event(
-                    VoiceEvent(type=VoiceEventType.AGENT_TRANSCRIPT, text=text)
-                )
+            else:
+                # Full agent transcript: only forward it if the deltas that
+                # already carried this text never arrived.
+                saw_deltas = self._saw_agent_transcript_delta
+                self._saw_agent_transcript_delta = False
+                if text and not saw_deltas:
+                    await self._put_event(
+                        VoiceEvent(type=VoiceEventType.AGENT_TRANSCRIPT, text=text)
+                    )
             return
 
         if etype == "response.function_call_arguments.delta":
@@ -399,6 +423,11 @@ class RealtimeVoiceSession:
                     arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 except json.JSONDecodeError:
                     arguments = {"_raw": raw_args}
+                if not isinstance(arguments, dict):
+                    # Valid JSON but the wrong shape (an array, say). Keep the
+                    # payload so the tool can report what it actually got,
+                    # instead of silently dispatching with empty arguments.
+                    arguments = {"_raw": raw_args}
             await self._put_event(
                 VoiceEvent(
                     type=VoiceEventType.TOOL_CALL,
@@ -417,6 +446,7 @@ class RealtimeVoiceSession:
                 self._usage = self._usage.merge(usage)
                 await self._put_event(VoiceEvent(type=VoiceEventType.USAGE, usage=usage))
             self._clear_function_arg_buffers()
+            self._saw_agent_transcript_delta = False
             return
 
         if etype == "error":
@@ -451,6 +481,9 @@ def _usage_from_response(msg: dict[str, Any]) -> UsageSnapshot | None:
     # Field names vary slightly across API versions
     input_details = usage.get("input_token_details") or {}
     output_details = usage.get("output_token_details") or {}
+    cached_details = input_details.get("cached_tokens_details") or {}
+    if not isinstance(cached_details, dict):
+        cached_details = {}
     return UsageSnapshot(
         input_audio_tokens=int(
             input_details.get("audio_tokens")
@@ -473,5 +506,7 @@ def _usage_from_response(msg: dict[str, Any]) -> UsageSnapshot | None:
             or usage.get("cached_input_tokens")
             or 0
         ),
+        cached_input_audio_tokens=int(cached_details.get("audio_tokens") or 0),
+        cached_input_text_tokens=int(cached_details.get("text_tokens") or 0),
         raw=usage,
     )

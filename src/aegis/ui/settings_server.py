@@ -15,7 +15,13 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from aegis.config import default_paths, load_config
-from aegis.config.env import env_status, load_dotenv, project_root, write_env_key
+from aegis.config.env import (
+    ALLOWED_ENV_KEYS,
+    env_status,
+    load_dotenv,
+    project_root,
+    write_env_key,
+)
 from aegis.config.save import apply_llm_settings, save_config
 from aegis.llm import chatgpt_oauth as chatgpt_oauth_mod
 from aegis.llm.chatgpt_oauth import clear_tokens, login_with_device_code, save_manual_token
@@ -42,34 +48,8 @@ _MAX_JSON_BODY_BYTES = 256 * 1024
 _MAX_ENV_KEY_BODY_BYTES = 8 * 1024
 
 # secrets.env is for API keys / provider credentials — not arbitrary process env.
-_ALLOWED_ENV_KEYS = frozenset(
-    {
-        "OPENAI_API_KEY",
-        "OPENAI_BASE_URL",
-        "LITELLM_API_KEY",
-        "LITELLM_BASE_URL",
-        "AZURE_OPENAI_API_KEY",
-        "AZURE_OPENAI_ENDPOINT",
-        "AZURE_OPENAI_API_VERSION",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "AWS_REGION",
-        "AWS_DEFAULT_REGION",
-        "BEDROCK_API_KEY",
-        "PICOVOICE_ACCESS_KEY",
-        "ANTHROPIC_API_KEY",
-        "GOOGLE_API_KEY",
-        "GROQ_API_KEY",
-        "TOGETHER_API_KEY",
-        "MISTRAL_API_KEY",
-        "COHERE_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "XAI_API_KEY",
-        "OLLAMA_API_KEY",
-        "OLLAMA_HOST",
-    }
-)
+# Shared with the dotenv loader so the write and read paths cannot drift.
+_ALLOWED_ENV_KEYS = ALLOWED_ENV_KEYS
 
 
 def _settings_dict(cfg) -> dict[str, Any]:
@@ -235,7 +215,20 @@ class SettingsHandler(BaseHTTPRequestHandler):
             log.exception("settings GET api error")
             self._json(500, {"error": str(exc)})
 
+    # GETs that spawn a subprocess or make an outbound request with the user's
+    # credentials. A cross-origin page can issue a CORS-simple GET at loopback
+    # and, while it cannot read the response, the side effect still happens —
+    # so these need the same CSRF token the POSTs use.
+    _SIDE_EFFECTING_GETS = frozenset({"/api/probe", "/api/doctor"})
+
     def _do_get_api(self, path: str, qs: dict[str, list[str]]) -> None:
+        if path in self._SIDE_EFFECTING_GETS and not self._csrf_ok():
+            self._json(403, {"error": "bad_csrf"})
+            return
+        if (self.headers.get("Sec-Fetch-Site") or "").lower() == "cross-site":
+            self._json(403, {"error": "cross_site"})
+            return
+
         if path == "/api/probe":
             load_dotenv()
             cfg = load_config(missing_ok=True)
@@ -330,6 +323,8 @@ class SettingsHandler(BaseHTTPRequestHandler):
                     raise ValueError("key and value required")
                 if any(c in key for c in " =\n\r"):
                     raise ValueError("invalid key name")
+                if any(c in value for c in "\n\r\x00"):
+                    raise ValueError("value must not contain newlines")
                 if key not in _ALLOWED_ENV_KEYS and not (
                     key.endswith("_API_KEY") or key.endswith("_ACCESS_KEY")
                 ):

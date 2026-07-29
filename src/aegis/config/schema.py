@@ -182,8 +182,10 @@ class SessionConfig(BaseModel):
     max_duration_s: int = Field(default=900, ge=30)
     max_session_cost_usd: float = Field(default=2.0, ge=0.0)
     connect_timeout_s: float = Field(default=8.0, ge=1.0)
+    # Reserved — no session path reads this yet.
     reuse_grace_s: float = Field(default=0.0, ge=0.0)
     instructions_file: str = "~/.config/aegis/instructions.md"
+    # Reserved — not yet sent in the Realtime session.update payload.
     reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"] = "minimal"
     context: SessionContextConfig = Field(default_factory=SessionContextConfig)
 
@@ -502,10 +504,16 @@ class McpConfig(BaseModel):
 
 
 class PrivacyConfig(BaseModel):
-    store_transcripts: bool = True
+    # Reserved — nothing persists transcripts or audio yet. Defaults are False
+    # so implementing persistence has to be an explicit opt-in rather than
+    # inheriting a store-by-default that was never reviewed.
+    store_transcripts: bool = False
     store_audio: bool = False
     audio_debug_buffer: bool = False
     redact_secrets_in_audit: bool = True
+    # Days of audit JSONL to keep; 0 keeps everything. Old files are pruned on
+    # the first write of each new day.
+    audit_retention_days: int = Field(default=0, ge=0)
 
 
 class ObservabilityConfig(BaseModel):

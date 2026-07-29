@@ -387,6 +387,9 @@ def test_energy_vad_and_graph_stop() -> None:
     silence = np.zeros(320, dtype=np.int16)
     loud = np.full(320, 5000, dtype=np.int16)
     assert vad.should_uplink(silence) is False
+    # One 20ms frame is below the 30ms min_speech_ms debounce, so it stays
+    # gated; the run has to qualify as speech before uplink opens.
+    assert vad.should_uplink(loud) is False
     assert vad.should_uplink(loud) is True
     vad.reset()
     # Graph stop without start should not explode

@@ -56,6 +56,9 @@ def shell_tool_specs() -> list[ToolSpec]:
             ),
             parameters=RUN_COMMAND_PARAMETERS,
             risk="exec",
+            # Real risk comes from the argv policy: allowlisted read-only
+            # commands are auto, everything else prompts or denies.
+            dynamic_risk=True,
             handler=handle_run_command,
         )
     ]

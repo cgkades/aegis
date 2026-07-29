@@ -13,16 +13,41 @@ from aegis.util.secrets import resolve_api_key
 log = get_logger("mcp.remote")
 
 
-def build_remote_mcp_tools(cfg: AegisConfig) -> list[dict[str, Any]]:
-    """Return OpenAI Realtime `tools` entries of type mcp."""
+def build_remote_mcp_tools(
+    cfg: AegisConfig,
+    *,
+    audit: Any | None = None,
+    session_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return OpenAI Realtime `tools` entries of type mcp.
+
+    ``audit`` records the high-severity ``remote_mcp.private_url_enabled``
+    event the design requires whenever a private/loopback tool surface is
+    exposed to the cloud provider.
+    """
     out: list[dict[str, Any]] = []
     for server in cfg.mcp.remote.servers:
-        if _is_private_url(server.server_url) and not server.allow_private_server_url:
+        private = _is_private_url(server.server_url)
+        if private and not server.allow_private_server_url:
             log.warning(
                 "skipping private MCP url for %s (set allow_private_server_url)",
                 server.label,
             )
             continue
+        if private:
+            log.warning(
+                "exposing private MCP url for %s to the model provider",
+                server.label,
+            )
+            if audit is not None:
+                audit.log(
+                    "remote_mcp.private_url_enabled",
+                    session_id=session_id,
+                    tool_name=server.label,
+                    decision="allow",
+                    risk="network",
+                    server_label=server.label,
+                )
         entry: dict[str, Any] = {
             "type": "mcp",
             "server_label": server.label,

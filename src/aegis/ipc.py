@@ -114,8 +114,16 @@ def read_pid(path: Path) -> int | None:
 
 
 def pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
     try:
         os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The pid exists, it just belongs to another user. Treating it as dead
+        # would let a second daemon start and steal the control socket.
         return True
     except OSError:
         return False
+    return True

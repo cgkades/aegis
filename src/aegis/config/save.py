@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -41,14 +44,32 @@ def config_to_toml(cfg: AegisConfig) -> str:
 
 
 def save_config(cfg: AegisConfig, path: Path) -> Path:
-    """Write config TOML to path (creates parent dirs)."""
+    """Write config TOML to path atomically (creates parent dirs).
+
+    Writes a sibling temp file and renames it into place. A truncated config —
+    from a crash mid-write or two writers racing (settings server and CLI) —
+    would make the daemon exit 78 at startup and stay down, turning a "Save"
+    click into an outage.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     text = config_to_toml(cfg)
-    path.write_text(text, encoding="utf-8")
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+    )
+    tmp_path = Path(tmp_name)
     try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        # Permissions before the rename so the file is never briefly world-readable.
+        with contextlib.suppress(OSError):
+            tmp_path.chmod(0o600)
+        os.replace(tmp_path, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+        raise
     return path
 
 

@@ -48,6 +48,10 @@ TEXT_ONLY_BACKENDS = {
 # Back-compat alias
 _TEXT_ONLY_BACKENDS = TEXT_ONLY_BACKENDS
 
+# Providers whose connect() is still a stub: refuse them up front instead of
+# reporting a started session that dies on the first await.
+UNIMPLEMENTED_BACKENDS = {"text_fallback", "gpt_live"}
+
 
 async def run_session_once(
     cfg: AegisConfig,
@@ -59,6 +63,7 @@ async def run_session_once(
     install_signal_handlers: bool = True,
     interactive_approval: bool | None = None,
     approval_handler: ApprovalHandler | None = None,
+    session_id: str | None = None,
 ) -> int:
     """Connect voice, stream mic (if available), play agent audio, exit on end/SIGINT.
 
@@ -69,6 +74,9 @@ async def run_session_once(
 
     ``interactive_approval``: when None, auto-detect via stdin TTY. Daemon hosts
     should pass ``approval_handler`` (IPC broker) instead of relying on stdin.
+
+    ``session_id`` lets the daemon reuse the id it already handed to its IPC
+    caller, so status output and audit records refer to the same session.
     """
     paths = paths or default_paths()
     paths.ensure_dirs()
@@ -87,7 +95,7 @@ async def run_session_once(
     deadline = time.monotonic() + duration
 
     machine = SessionMachine()
-    machine.trigger(Trigger.CLI_START, skip_confirm=True)
+    machine.trigger(Trigger.CLI_START, skip_confirm=True, session_id=session_id)
     machine.trigger(Trigger.CAPTURE_READY)
     assert machine.state is SessionState.CONNECTING
 
@@ -101,6 +109,7 @@ async def run_session_once(
     audit = AuditLogger(
         paths.audit_dir,
         redact=cfg.privacy.redact_secrets_in_audit,
+        retention_days=cfg.privacy.audit_retention_days,
     )
     registry = build_registry(cfg, audit=audit)
     # Start configured local MCP stdio servers and register their tools before we
@@ -120,7 +129,9 @@ async def run_session_once(
 
     tool_schemas = registry.openai_function_schemas()
     # Merge remote MCP tools for Realtime API to execute
-    remote_mcp = build_remote_mcp_tools(cfg)
+    remote_mcp = build_remote_mcp_tools(
+        cfg, audit=audit, session_id=machine.context.session_id
+    )
     all_tools = [*tool_schemas, *remote_mcp]
 
     context = ContextManager(cfg.session.context)
@@ -307,8 +318,13 @@ async def run_session_once(
                 last_activity = time.monotonic()
                 context.add_transcript("assistant", event.text)
                 print(f"Aegis: {event.text}", flush=True)
+            elif event.type is VoiceEventType.USER_TURN_STARTED:
+                # Primary turn boundary. Resetting only on USER_TRANSCRIPT meant
+                # a failing transcription pass permanently exhausted the
+                # per-turn budget and every later tool call was refused.
+                registry.reset_turn()
+                last_activity = time.monotonic()
             elif event.type is VoiceEventType.USER_TRANSCRIPT and event.text:
-                # A new user turn resets the per-turn tool-call budget.
                 registry.reset_turn()
                 last_activity = time.monotonic()
                 context.add_transcript("user", event.text)

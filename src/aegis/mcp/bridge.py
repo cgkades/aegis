@@ -41,7 +41,11 @@ class LocalMcpBridge:
 
     async def close(self) -> None:
         for client in self._clients:
-            await client.close()
+            # One misbehaving server must not stop the others from being reaped.
+            try:
+                await client.close()
+            except Exception as exc:
+                log.error("failed to close MCP server %s: %s", client.name, exc)
         self._clients.clear()
 
     async def _start_server(self, server: McpLocalServer) -> list[str]:
@@ -77,7 +81,7 @@ class LocalMcpBridge:
             safe_desc = "".join(ch for ch in raw_desc if ch.isprintable() or ch in "\n\t")
             if len(safe_desc) > 500:
                 safe_desc = safe_desc[:499] + "…"
-            params = tool.input_schema or {
+            params = _sanitize_schema(tool.input_schema) or {
                 "type": "object",
                 "properties": {},
                 "additionalProperties": False,
@@ -159,6 +163,52 @@ def _format_mcp_result(result: Any) -> str:
 
 def _safe(name: str) -> str:
     return "".join(c if c.isalnum() or c in "_-" else "_" for c in name)[:48]
+
+
+# A tool's inputSchema is delivered to the model as *trusted* metadata — unlike
+# tool results, it is not wrapped in untrusted-output fencing. Sanitize it the
+# same way the description is, so a hostile server cannot smuggle instructions
+# or megabytes of padding through a property description.
+_SCHEMA_MAX_DEPTH = 8
+_SCHEMA_MAX_STRING = 500
+_SCHEMA_MAX_ITEMS = 100
+_SCHEMA_MAX_BYTES = 20_000
+
+
+def _sanitize_schema_value(value: Any, depth: int = 0) -> Any:
+    if depth > _SCHEMA_MAX_DEPTH:
+        return None
+    if isinstance(value, str):
+        text = "".join(ch for ch in value if ch.isprintable() or ch in "\n\t")
+        if len(text) > _SCHEMA_MAX_STRING:
+            text = text[: _SCHEMA_MAX_STRING - 1] + "…"
+        return text
+    if isinstance(value, bool | int | float) or value is None:
+        return value
+    if isinstance(value, list):
+        return [_sanitize_schema_value(v, depth + 1) for v in value[:_SCHEMA_MAX_ITEMS]]
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, val in list(value.items())[:_SCHEMA_MAX_ITEMS]:
+            if not isinstance(key, str):
+                continue
+            safe_key = "".join(ch for ch in key if ch.isprintable())[:_SCHEMA_MAX_STRING]
+            if safe_key:
+                out[safe_key] = _sanitize_schema_value(val, depth + 1)
+        return out
+    return None
+
+
+def _sanitize_schema(schema: Any) -> dict[str, Any] | None:
+    if not isinstance(schema, dict) or not schema:
+        return None
+    cleaned = _sanitize_schema_value(schema)
+    if not isinstance(cleaned, dict):
+        return None
+    if len(json.dumps(cleaned, default=str).encode("utf-8")) > _SCHEMA_MAX_BYTES:
+        log.warning("MCP tool schema exceeded %d bytes; using empty schema", _SCHEMA_MAX_BYTES)
+        return None
+    return cleaned
 
 
 def _resolve_server_env(configured: dict[str, str]) -> dict[str, str]:

@@ -27,6 +27,11 @@ class UsageSnapshot:
     input_text_tokens: int = 0
     output_text_tokens: int = 0
     cached_input_tokens: int = 0
+    # Modality split of cached_input_tokens when the server reports it. Cost
+    # estimation needs it: cached text and cached audio are priced from very
+    # different base rates.
+    cached_input_audio_tokens: int = 0
+    cached_input_text_tokens: int = 0
     raw: dict[str, Any] | None = None
 
     def merge(self, other: UsageSnapshot) -> UsageSnapshot:
@@ -36,6 +41,12 @@ class UsageSnapshot:
             input_text_tokens=self.input_text_tokens + other.input_text_tokens,
             output_text_tokens=self.output_text_tokens + other.output_text_tokens,
             cached_input_tokens=self.cached_input_tokens + other.cached_input_tokens,
+            cached_input_audio_tokens=(
+                self.cached_input_audio_tokens + other.cached_input_audio_tokens
+            ),
+            cached_input_text_tokens=(
+                self.cached_input_text_tokens + other.cached_input_text_tokens
+            ),
             raw=other.raw or self.raw,
         )
 
@@ -43,6 +54,9 @@ class UsageSnapshot:
 class VoiceEventType(StrEnum):
     READY = "ready"
     AGENT_AUDIO = "agent_audio"
+    # The user started speaking — a turn boundary that, unlike USER_TRANSCRIPT,
+    # does not depend on the separate transcription pass succeeding.
+    USER_TURN_STARTED = "user_turn_started"
     USER_TRANSCRIPT = "user_transcript"
     AGENT_TRANSCRIPT = "agent_transcript"
     TOOL_CALL = "tool_call"

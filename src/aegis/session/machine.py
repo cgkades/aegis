@@ -155,7 +155,9 @@ class SessionMachine:
     ) -> None:
         if new is SessionState.WAKING and old is SessionState.IDLE:
             self._ctx = SessionContext(
-                session_id=str(uuid.uuid4()),
+                # Callers may supply the id so one identifier spans the daemon's
+                # IPC responses, the session banner, and the audit records.
+                session_id=str(event.payload.get("session_id") or uuid.uuid4()),
                 started_at=time.monotonic(),
                 confirm_enabled=bool(event.payload.get("confirm_enabled", True)),
                 skip_confirm=bool(event.payload.get("skip_confirm", False)),

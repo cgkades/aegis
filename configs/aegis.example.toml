@@ -24,9 +24,12 @@ local_vad_hangover_ms = 300
 duck_on_playback = true
 
 [wake]
-enabled = true
-engine = "openwakeword"  # openwakeword | porcupine
-phrase = "hey_aegis"
+# openwakeword pins tflite-runtime, which has no wheels for Python 3.12+ — the
+# only supported interpreters. Use porcupine (`uv sync --extra porcupine` plus
+# PICOVOICE_ACCESS_KEY) and set enabled = true once the engine is installed.
+enabled = false
+engine = "porcupine"  # openwakeword | porcupine
+phrase = "porcupine"
 threshold = 0.5
 custom_model_path = ""
 confirm_speech_timeout_s = 1.5
@@ -64,13 +67,17 @@ realtime_url = "wss://api.openai.com/v1/realtime"
 
 [tools]
 enabled = ["fs"]
-working_directory = "~"
+# Every file under this directory is reachable by fs/write/shell tools. Setting
+# it to "~" hands the model your whole home directory; the default is a
+# dedicated workspace for a reason.
+working_directory = "~/.local/share/aegis/workspace"
 sandbox_to_workdir = true
 max_output_bytes = 100000
 default_timeout_s = 30
 max_tool_calls_per_turn = 8
 max_tool_calls_per_session = 64
-parallel_read_tools = true
+# Reserved — the tool loop is serial today.
+parallel_read_tools = false
 
 [tools.shell]
 enabled = false
@@ -131,7 +138,8 @@ env_allowlist = ["KUBECONFIG", "KUBECTL_CONTEXT", "KUBERNETES_MASTER"]
 # items = []
 
 [privacy]
-store_transcripts = true
+# Reserved — transcript/audio persistence is not implemented yet.
+store_transcripts = false
 store_audio = false
 audio_debug_buffer = false
 redact_secrets_in_audit = true

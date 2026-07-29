@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -107,7 +108,9 @@ def test_pid_helpers(tmp_path: Path) -> None:
     pid_file = tmp_path / "daemon.pid"
     write_pid(pid_file, 1)
     assert read_pid(pid_file) == 1
-    assert pid_alive(1) or not pid_alive(1)  # pid 1 may or may not signalable
+    # A live pid we own is always signalable; a pid far past the max never is.
+    assert pid_alive(os.getpid()) is True
+    assert pid_alive(4194303) is False
     sock = tmp_path / "a.sock"
     sock.write_text("x")
     remove_stale_socket(sock)
