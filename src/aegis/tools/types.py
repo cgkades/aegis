@@ -75,6 +75,10 @@ class ToolSpec:
     # ToolRegistry.dispatch under auto_readonly, so a handler that forgets to
     # check ``approved`` cannot silently auto-execute a write.
     dynamic_risk: bool = False
+    # Optional pre-dispatch shape check for tools whose contract is tighter
+    # than their JSON schema. Returns a JSON error string to deny the call, or
+    # None to allow it.
+    validate_args: Callable[[dict[str, Any]], str | None] | None = None
 
 
 # Normative OpenAI schema for run_command

@@ -133,13 +133,10 @@
             <option>shimmer</option><option>verse</option>
           </select>
         </label>
-        <label>
-          Reasoning effort
-          <select name="reasoning_effort" id="reasoning_effort">
-            <option>minimal</option><option>low</option><option>medium</option>
-            <option>high</option><option>xhigh</option>
-          </select>
-        </label>
+        <!-- session.reasoning_effort is deliberately not offered here: nothing
+             sends it to a provider yet, and a control that silently does
+             nothing is worse than no control. Set it in config.toml if you want
+             the value recorded for when it is wired up. -->
         <label>
           Temperature
           <input type="number" step="0.1" min="0" max="2" id="temperature" />

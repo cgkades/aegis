@@ -80,7 +80,20 @@ class VoiceEvent:
 
 @runtime_checkable
 class VoiceSession(Protocol):
-    """Minimal session: adapters map provider events → VoiceEvent."""
+    """Minimal session: adapters map provider events → VoiceEvent.
+
+    Error contract, which implementations must follow so callers can rely on it:
+
+    * ``send_tool_result`` and ``inject_user_text`` raise ``RuntimeError`` when
+      the session is not connected. Dropping a tool result silently leaves the
+      model waiting forever with no way to notice.
+    * ``send_audio`` is best-effort and never raises for a backend that has no
+      use for microphone input (a text-only chat provider ignores it); it does
+      raise when a voice backend is not connected.
+    * ``USAGE`` events are **deltas**, not running totals. Consumers sum them,
+      so an implementation that also emits a cumulative snapshot at the end
+      makes every consumer double-count.
+    """
 
     async def connect(self, config: SessionConfig) -> None: ...
 

@@ -164,8 +164,10 @@ SETTINGS: tuple[SettingSpec, ...] = (
                 (("session", "provider"), ("llm", "chat_provider"))),
     SettingSpec("model", ("session", "model"), (("session", "model"),)),
     SettingSpec("voice", ("session", "voice"), (("session", "voice"),)),
-    SettingSpec("reasoning_effort", ("session", "reasoning_effort"),
-                (("session", "reasoning_effort"),)),
+    # session.reasoning_effort is intentionally absent: no code path sends it to
+    # a provider, so exposing it as a savable setting advertises an effect that
+    # does not exist. Re-add here (and add an input to the page) when it is
+    # actually put on the wire.
     SettingSpec("max_session_cost_usd", ("session", "max_session_cost_usd"),
                 (("session", "max_session_cost_usd"),), float),
     SettingSpec("max_duration_s", ("session", "max_duration_s"),

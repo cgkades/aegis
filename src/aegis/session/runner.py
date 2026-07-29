@@ -27,6 +27,11 @@ from aegis.tools.registry import ToolRegistry
 from aegis.ui.status import Presence, StatusPresenter, format_session_banner
 from aegis.util.logging import get_logger, setup_logging
 from aegis.util.metrics import SessionMetrics
+from aegis.voice.capabilities import (
+    TEXT_ONLY_PROVIDERS,
+    UNIMPLEMENTED_PROVIDERS,
+    is_text_only,
+)
 from aegis.voice.factory import create_voice_session
 from aegis.voice.gateway import default_gateway
 from aegis.voice.protocol import (
@@ -40,23 +45,11 @@ log = get_logger("session.runner")
 
 # Poll interval for cost/duration caps while waiting for the next voice event.
 _EVENT_POLL_INTERVAL_S = 0.25
-TEXT_ONLY_BACKENDS = {
-    "ollama",
-    "litellm",
-    "chatgpt_oauth",
-    "openai_api",
-    "azure_openai",
-    "azure",
-    "bedrock",
-    "aws_bedrock",
-    "hybrid_text_tools",
-}
-# Back-compat alias
-_TEXT_ONLY_BACKENDS = TEXT_ONLY_BACKENDS
-
-# Providers whose connect() is still a stub: refuse them up front instead of
-# reporting a started session that dies on the first await.
-UNIMPLEMENTED_BACKENDS = {"text_fallback", "gpt_live"}
+# Provider capabilities live in voice.capabilities so the runner, the daemon
+# and the session factory cannot disagree about what a backend can do.
+TEXT_ONLY_BACKENDS = TEXT_ONLY_PROVIDERS
+_TEXT_ONLY_BACKENDS = TEXT_ONLY_BACKENDS  # back-compat alias
+UNIMPLEMENTED_BACKENDS = UNIMPLEMENTED_PROVIDERS
 
 
 async def run_session_once(
@@ -90,7 +83,7 @@ async def run_session_once(
         interactive_approval = approval_handler is None and bool(
             getattr(sys.stdin, "isatty", lambda: False)()
         )
-    if str(backend).lower().replace("-", "_") in _TEXT_ONLY_BACKENDS:
+    if is_text_only(backend):
         print(
             f"{backend} is a text-only provider and cannot be used by the voice session CLI yet. "
             "Use --backend realtime or mock; cascaded STT/TTS is not implemented.",

@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from aegis.approval.broker import ApprovalBroker
 from aegis.audio import AudioGraph, AudioGraphConfig, sounddevice_available
 from aegis.audit import AuditLogger
@@ -27,15 +29,12 @@ from aegis.ipc import (
 )
 from aegis.session.events import SessionState, Trigger
 from aegis.session.machine import SessionMachine
-from aegis.session.runner import (
-    TEXT_ONLY_BACKENDS,
-    UNIMPLEMENTED_BACKENDS,
-    run_session_once,
-)
+from aegis.session.runner import run_session_once
 from aegis.util.logging import get_logger, setup_logging
+from aegis.voice.capabilities import is_text_only, is_unimplemented
 from aegis.voice.gateway import default_gateway
 from aegis.wake import ConfirmSpeechGate
-from aegis.wake.base import WakeEngine
+from aegis.wake.base import WakeEngine, WakeEvent
 from aegis.wake.factory import create_wake_engine
 
 log = get_logger("daemon")
@@ -248,11 +247,16 @@ class AegisDaemon:
             else:
                 await self._start_session(source="wake", skip_confirm=True)
 
-    def _wake_process_frame(self, frame: object) -> tuple[object | None, object | None]:
-        """CPU-heavy wake path (runs in a worker thread)."""
+    def _wake_process_frame(
+        self, frame: np.ndarray
+    ) -> tuple[WakeEvent | None, WakeEvent | None]:
+        """CPU-heavy wake path (runs in a worker thread).
+
+        Returns ``(detection, confirmation)`` — at most one is ever set.
+        """
         with self._wake_lock:
             assert self._graph is not None and self._wake is not None
-            wake_pcm = self._graph.to_wake_rate(frame)  # type: ignore[arg-type]
+            wake_pcm = self._graph.to_wake_rate(frame)
             if self._confirm.waiting:
                 return None, self._confirm.process_audio(wake_pcm)
             return self._wake.process(wake_pcm), None
@@ -307,14 +311,13 @@ class AegisDaemon:
             }
         cfg = reload_result.cfg
         provider = str(cfg.session.provider.value)
-        normalized = provider.lower().replace("-", "_")
-        if normalized in TEXT_ONLY_BACKENDS:
+        if is_text_only(provider):
             return {
                 "started": False,
                 "reason": f"text_only_provider:{provider}",
                 "hint": "set session.provider to realtime or mock",
             }
-        if normalized in UNIMPLEMENTED_BACKENDS:
+        if is_unimplemented(provider):
             # connect() raises NotImplementedError for these, so reporting
             # started:true would hand the caller a session that is already dead.
             return {

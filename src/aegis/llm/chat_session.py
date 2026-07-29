@@ -79,7 +79,8 @@ class ChatLLMSession:
         )
 
     async def send_audio(self, pcm16_24k_mono: bytes) -> None:
-        # Cascaded STT not wired yet — ignore PCM for chat providers
+        # Intentional no-op, per the VoiceSession contract: cascaded STT is not
+        # wired up, so a chat provider has nothing to do with microphone PCM.
         return None
 
     async def inject_user_text(self, text: str) -> None:
@@ -104,10 +105,12 @@ class ChatLLMSession:
         *,
         is_error: bool = False,
     ) -> None:
+        if not self._connected or self._client is None:
+            # Match Realtime/Mock rather than dropping the result on the floor:
+            # a silently discarded tool result leaves the model waiting.
+            raise RuntimeError("chat session not connected")
         note = f"Tool {call_id} {'error' if is_error else 'result'}: {output[:2000]}"
         self._history.append(ChatMessage(role="user", content=note))
-        if self._client is None:
-            return
         self._prune_history()
         resp = await self._client.chat(self._history)
         self._history.append(ChatMessage(role="assistant", content=resp.text))

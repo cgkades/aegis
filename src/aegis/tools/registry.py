@@ -110,20 +110,13 @@ class ToolRegistry:
                 is_error=True,
             )
 
-        # run_command: reject non-argv shapes early
-        if name == "run_command":
-            if set(arguments.keys()) - {"argv"}:
-                return ToolResult(
-                    output='{"error":"argv_only_schema"}',
-                    is_error=True,
-                    decision="deny",
-                )
-            if "argv" not in arguments:
-                return ToolResult(
-                    output='{"error":"argv_only_schema"}',
-                    is_error=True,
-                    decision="deny",
-                )
+        # Tools that need a stricter argument shape than the JSON schema alone
+        # enforces declare a validator; the registry stays tool-agnostic rather
+        # than special-casing one tool by name.
+        if spec.validate_args is not None:
+            error = spec.validate_args(arguments)
+            if error is not None:
+                return ToolResult(output=error, is_error=True, decision="deny")
 
         approval_mode = self.tools_config.approval.default
         session_granted = self._is_session_granted(name, arguments)
