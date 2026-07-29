@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import os
+from collections import deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -33,6 +34,78 @@ _EVENT_QUEUE_MAX = 256
 _MAX_FUNCTION_ARG_BYTES = 512_000
 _MAX_FUNCTION_ARG_CALLS = 8
 _MAX_FUNCTION_ARG_TOTAL_BYTES = 1_000_000
+
+
+class _EventQueue:
+    """Bounded FIFO of voice events that can evict audio from the middle.
+
+    ``asyncio.Queue`` cannot drop anything but the head, so the previous version
+    reached into its private ``_queue`` deque to evict agent audio under
+    pressure. That breaks silently if the Queue internals change — at exactly
+    the moment eviction matters. Owning the deque keeps the same FIFO delivery
+    order (audio and control events stay interleaved as produced) and makes the
+    eviction policy explicit.
+
+    Single-consumer, single event loop; no locking needed.
+    """
+
+    def __init__(self, maxsize: int) -> None:
+        self._items: deque[VoiceEvent | None] = deque()
+        self._maxsize = maxsize
+        self._has_items = asyncio.Event()
+        self._has_space = asyncio.Event()
+        self._has_space.set()
+
+    def qsize(self) -> int:
+        return len(self._items)
+
+    def empty(self) -> bool:
+        return not self._items
+
+    def full(self) -> bool:
+        return len(self._items) >= self._maxsize
+
+    def _refresh(self) -> None:
+        if self._items:
+            self._has_items.set()
+        else:
+            self._has_items.clear()
+        if self.full():
+            self._has_space.clear()
+        else:
+            self._has_space.set()
+
+    def put_nowait(self, item: VoiceEvent | None) -> None:
+        if self.full():
+            raise asyncio.QueueFull
+        self._items.append(item)
+        self._refresh()
+
+    async def put(self, item: VoiceEvent | None) -> None:
+        while self.full():
+            await self._has_space.wait()
+        self.put_nowait(item)
+
+    def get_nowait(self) -> VoiceEvent | None:
+        if not self._items:
+            raise asyncio.QueueEmpty
+        item = self._items.popleft()
+        self._refresh()
+        return item
+
+    async def get(self) -> VoiceEvent | None:
+        while not self._items:
+            await self._has_items.wait()
+        return self.get_nowait()
+
+    def drop_oldest_audio(self) -> bool:
+        """Evict one queued audio event, leaving protocol control events alone."""
+        for index, item in enumerate(self._items):
+            if item is not None and item.type is VoiceEventType.AGENT_AUDIO:
+                del self._items[index]
+                self._refresh()
+                return True
+        return False
 
 
 @dataclass(slots=True)
@@ -71,9 +144,7 @@ class RealtimeVoiceSession:
         self._tools = tools or []
         self._instructions = instructions or DEFAULT_INSTRUCTIONS
         self._ws: ClientConnection | None = None
-        self._events: asyncio.Queue[VoiceEvent | None] = asyncio.Queue(
-            maxsize=_EVENT_QUEUE_MAX
-        )
+        self._events = _EventQueue(_EVENT_QUEUE_MAX)
         self._recv_task: asyncio.Task[None] | None = None
         self._connected = False
         self._config: SessionConfig | None = None
@@ -241,22 +312,13 @@ class RealtimeVoiceSession:
         assert self._ws is not None
         await self._ws.send(json.dumps(payload))
 
-    def _drop_oldest_audio(self) -> bool:
-        """Evict one queued audio event without disturbing protocol control events."""
-        queue = self._events._queue  # asyncio.Queue deque; all access is on this loop.
-        for index, item in enumerate(queue):
-            if item is not None and item.type is VoiceEventType.AGENT_AUDIO:
-                del queue[index]
-                return True
-        return False
-
     def _put_event_nowait(self, event: VoiceEvent | None) -> bool:
         """Enqueue without dropping control events; return False if they fill the queue."""
         try:
             self._events.put_nowait(event)
             return True
         except asyncio.QueueFull:
-            if not self._drop_oldest_audio():
+            if not self._events.drop_oldest_audio():
                 return False
         self._events.put_nowait(event)
         return True
