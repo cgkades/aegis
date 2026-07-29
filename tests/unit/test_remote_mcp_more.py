@@ -51,6 +51,7 @@ def test_remote_with_headers(monkeypatch) -> None:
                             "server_url": "https://example.com/mcp",
                             "headers": {"X-Test": "env:MCP_TEST_HEADER"},
                             "require_approval": "always",
+                            "allowed_tools": ["search"],
                         }
                     ]
                 }

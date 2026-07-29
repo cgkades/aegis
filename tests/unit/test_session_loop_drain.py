@@ -82,6 +82,7 @@ def _make_loop(session, graph, machine, cfg, *, deadline_s: float = 30.0) -> _Se
         context=ContextManager(cfg.session.context),
         metrics=SessionMetrics(model=cfg.session.model),
         status=StatusPresenter(chime_on_wake=False, chime_on_connecting=False),
+        audit=None,
         stop=asyncio.Event(),
         deadline=time.monotonic() + deadline_s,
         uplink_task=None,

@@ -292,6 +292,7 @@ def test_remote_mcp_public_included() -> None:
                         {
                             "label": "pub",
                             "server_url": "https://example.com/mcp",
+                            "allowed_tools": ["search"],
                         }
                     ]
                 }

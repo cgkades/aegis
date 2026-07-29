@@ -17,7 +17,11 @@ from aegis.config.schema import AegisConfig
 from aegis.session.events import Trigger
 from aegis.session.machine import SessionMachine
 from aegis.tools.registry import ToolRegistry
-from aegis.tools.sanitize import strip_control_sequences, wrap_untrusted
+from aegis.tools.sanitize import (
+    escape_line_breaks,
+    strip_control_sequences,
+    wrap_untrusted,
+)
 from aegis.tools.types import ToolResult
 from aegis.util.logging import get_logger
 from aegis.voice.protocol import ToolCallRequest, VoiceSession
@@ -49,6 +53,9 @@ _TARGET_KEYS = (
 )
 _BODY_KEYS = ("content", "patch", "body", "data", "text", "input", "yaml", "json")
 _SUMMARY_MAX = 500
+# Target keys (path/argv/url/…) get their own budget on top of _SUMMARY_MAX so
+# the operator always sees the full blast radius, not a prefix of it.
+_TARGET_MAX = 400
 
 
 async def handle_tool_call(
@@ -159,10 +166,11 @@ def _approval_summary(arguments: dict[str, Any]) -> str:
     Body fields are reduced to length + short hash + head snippet.
     """
     if not isinstance(arguments, dict):
-        text = strip_control_sequences(str(arguments))
+        text = _render_value(str(arguments))
         return text if len(text) <= _SUMMARY_MAX else text[: _SUMMARY_MAX - 1] + "…"
 
-    parts: list[str] = []
+    target_parts: list[str] = []
+    other_parts: list[str] = []
     seen: set[str] = set()
 
     for key in _TARGET_KEYS:
@@ -170,37 +178,56 @@ def _approval_summary(arguments: dict[str, Any]) -> str:
             continue
         seen.add(key)
         val = arguments[key]
-        rendered = strip_control_sequences(
+        rendered = _render_value(
             json.dumps(val, ensure_ascii=False, default=str) if not isinstance(val, str) else val
         )
-        # Target keys are never truncated — operator must see the full path/argv.
-        parts.append(f"{key}={rendered}")
+        # Target keys carry the blast radius, so they get their own generous
+        # budget instead of competing with body fields for one 500-char cap —
+        # a long path used to be cut mid-string, letting an operator approve on
+        # a prefix.
+        if len(rendered) > _TARGET_MAX:
+            rendered = f"{rendered[:_TARGET_MAX]}…[+{len(rendered) - _TARGET_MAX} chars]"
+        target_parts.append(f"{key}={rendered}")
 
     for key in _BODY_KEYS:
         if key not in arguments:
             continue
         seen.add(key)
-        parts.append(f"{key}={_summarize_body(arguments[key])}")
+        other_parts.append(f"{key}={_summarize_body(arguments[key])}")
 
     for key in sorted(arguments.keys()):
         if key in seen:
             continue
         val = arguments[key]
         if isinstance(val, str) and len(val) > 120:
-            parts.append(f"{key}={_summarize_body(val)}")
+            other_parts.append(f"{key}={_summarize_body(val)}")
         else:
-            rendered = strip_control_sequences(
-                json.dumps(val, ensure_ascii=False, default=str)
-            )
+            rendered = _render_value(json.dumps(val, ensure_ascii=False, default=str))
             if len(rendered) > 120:
                 rendered = rendered[:119] + "…"
-            parts.append(f"{key}={rendered}")
+            other_parts.append(f"{key}={rendered}")
 
-    text = strip_control_sequences(" ".join(parts) if parts else "{}")
-    if len(text) <= _SUMMARY_MAX:
-        return text
-    # Prefer keeping target prefixes; trim from the end.
-    return text[: _SUMMARY_MAX - 1] + "…"
+    if not target_parts and not other_parts:
+        return "{}"
+
+    targets = " ".join(target_parts)
+    remaining = max(0, _SUMMARY_MAX - len(targets))
+    tail = " ".join(other_parts)
+    if len(tail) > remaining:
+        tail = tail[: max(0, remaining - 1)] + "…" if remaining else ""
+    return " ".join(part for part in (targets, tail) if part)
+
+
+def _render_value(text: str) -> str:
+    """Make a model-chosen value safe to print in the operator's prompt.
+
+    Stripping control characters is not enough on its own: newline, carriage
+    return and tab survive that pass, and the approval prompt is printed
+    verbatim to the terminal. A value containing "\\n  Allow? [y]es: y\\n" can
+    forge a second approval prompt, and a bare "\\r" rewrites the line the
+    operator is reading.
+    """
+    return escape_line_breaks(strip_control_sequences(text))
 
 
 def _summarize_body(value: object) -> str:

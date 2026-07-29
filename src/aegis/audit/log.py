@@ -40,9 +40,12 @@ class AuditEvent:
             if key not in data:
                 data[key] = value
         if redact:
-            for key in ("args_summary", "result_summary", "error"):
-                if isinstance(data.get(key), str):
-                    data[key] = redact_secrets(data[key])
+            # Redact every string field, not just the three well-known ones:
+            # `extra` carries caller-supplied values (exception text, session
+            # reports) that can contain key material the named fields never see.
+            for key, value in data.items():
+                if isinstance(value, str):
+                    data[key] = redact_secrets(value)
         # Drop nulls for compact lines
         return {k: v for k, v in data.items() if v is not None}
 
