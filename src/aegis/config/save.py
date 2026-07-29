@@ -5,12 +5,18 @@ from __future__ import annotations
 import contextlib
 import os
 import tempfile
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 import tomli_w
 
 from aegis.config.schema import AegisConfig
+from aegis.util.logging import get_logger
+
+log = get_logger("config.save")
 
 _HEADER = (
     "# Aegis configuration — managed by `aegis settings` / settings page\n"
@@ -133,115 +139,143 @@ def _switch_profile_defaults(data: dict[str, Any], cfg: AegisConfig, profile: st
     data.setdefault("profile", {})["name"] = target.value
 
 
-def apply_llm_settings(
-    cfg: AegisConfig,
-    *,
-    profile: str | None = None,
-    provider: str | None = None,
-    model: str | None = None,
-    voice: str | None = None,
-    reasoning_effort: str | None = None,
-    max_session_cost_usd: float | None = None,
-    max_duration_s: int | None = None,
-    idle_timeout_s: int | None = None,
-    api_key_env: str | None = None,
-    realtime_url: str | None = None,
-    log_level: str | None = None,
-    # multi-provider
-    openai_chat_base_url: str | None = None,
-    litellm_base_url: str | None = None,
-    litellm_api_key_env: str | None = None,
-    litellm_model: str | None = None,
-    ollama_base_url: str | None = None,
-    ollama_native_base_url: str | None = None,
-    ollama_model: str | None = None,
-    chatgpt_token_path: str | None = None,
-    temperature: float | None = None,
-    max_tokens: int | None = None,
-    # Azure OpenAI / Foundry
-    azure_endpoint: str | None = None,
-    azure_api_key_env: str | None = None,
-    azure_api_version: str | None = None,
-    azure_deployment: str | None = None,
-    azure_api_style: str | None = None,
-    azure_auth_mode: str | None = None,
-    # AWS Bedrock
-    bedrock_region: str | None = None,
-    bedrock_model_id: str | None = None,
-    bedrock_profile: str | None = None,
-    bedrock_endpoint_url: str | None = None,
-) -> AegisConfig:
-    """Return a copy of cfg with LLM-related fields updated."""
+@dataclass(frozen=True, slots=True)
+class SettingSpec:
+    """One user-facing setting: where it is read from and where it is written."""
+
+    name: str
+    # Attribute path on AegisConfig, for building the GET payload.
+    source: tuple[str, ...]
+    # Dict paths in the dumped config. More than one when a value is mirrored
+    # (the legacy top-level [openai] block and its [llm.openai] equivalent).
+    targets: tuple[tuple[str, ...], ...]
+    coerce: Callable[[Any], Any] | None = None
+
+
+# The single source of truth for the settings surface. The GET payload, the
+# POST handler and the settings page all derive from this: previously each
+# maintained its own hand-written copy of the field list, and a field added to
+# three of the four was silently dropped on save.
+#
+# `profile` is deliberately absent — it does not map to a path, it rewrites
+# profile-owned defaults. See apply_settings.
+SETTINGS: tuple[SettingSpec, ...] = (
+    SettingSpec("provider", ("session", "provider"),
+                (("session", "provider"), ("llm", "chat_provider"))),
+    SettingSpec("model", ("session", "model"), (("session", "model"),)),
+    SettingSpec("voice", ("session", "voice"), (("session", "voice"),)),
+    SettingSpec("reasoning_effort", ("session", "reasoning_effort"),
+                (("session", "reasoning_effort"),)),
+    SettingSpec("max_session_cost_usd", ("session", "max_session_cost_usd"),
+                (("session", "max_session_cost_usd"),), float),
+    SettingSpec("max_duration_s", ("session", "max_duration_s"),
+                (("session", "max_duration_s"),), int),
+    SettingSpec("idle_timeout_s", ("session", "idle_timeout_s"),
+                (("session", "idle_timeout_s"),), int),
+    SettingSpec("log_level", ("app", "log_level"), (("app", "log_level"),)),
+    SettingSpec("api_key_env", ("openai", "api_key_env"),
+                (("openai", "api_key_env"), ("llm", "openai", "api_key_env"))),
+    SettingSpec("realtime_url", ("openai", "realtime_url"),
+                (("openai", "realtime_url"), ("llm", "openai", "realtime_url"))),
+    SettingSpec("openai_chat_base_url", ("openai", "chat_base_url"),
+                (("openai", "chat_base_url"), ("llm", "openai", "chat_base_url"))),
+    SettingSpec("temperature", ("llm", "temperature"), (("llm", "temperature"),), float),
+    SettingSpec("max_tokens", ("llm", "max_tokens"), (("llm", "max_tokens"),), int),
+    SettingSpec("litellm_base_url", ("llm", "litellm", "base_url"),
+                (("llm", "litellm", "base_url"),)),
+    SettingSpec("litellm_api_key_env", ("llm", "litellm", "api_key_env"),
+                (("llm", "litellm", "api_key_env"),)),
+    SettingSpec("litellm_model", ("llm", "litellm", "model"),
+                (("llm", "litellm", "model"),)),
+    SettingSpec("ollama_base_url", ("llm", "ollama", "base_url"),
+                (("llm", "ollama", "base_url"),)),
+    SettingSpec("ollama_native_base_url", ("llm", "ollama", "native_base_url"),
+                (("llm", "ollama", "native_base_url"),)),
+    SettingSpec("ollama_model", ("llm", "ollama", "model"),
+                (("llm", "ollama", "model"),)),
+    SettingSpec("chatgpt_token_path", ("llm", "chatgpt_oauth", "token_path"),
+                (("llm", "chatgpt_oauth", "token_path"),)),
+    SettingSpec("azure_endpoint", ("llm", "azure_openai", "endpoint"),
+                (("llm", "azure_openai", "endpoint"),)),
+    SettingSpec("azure_api_key_env", ("llm", "azure_openai", "api_key_env"),
+                (("llm", "azure_openai", "api_key_env"),)),
+    SettingSpec("azure_api_version", ("llm", "azure_openai", "api_version"),
+                (("llm", "azure_openai", "api_version"),)),
+    SettingSpec("azure_deployment", ("llm", "azure_openai", "deployment"),
+                (("llm", "azure_openai", "deployment"),)),
+    SettingSpec("azure_api_style", ("llm", "azure_openai", "api_style"),
+                (("llm", "azure_openai", "api_style"),)),
+    SettingSpec("azure_auth_mode", ("llm", "azure_openai", "auth_mode"),
+                (("llm", "azure_openai", "auth_mode"),)),
+    SettingSpec("bedrock_region", ("llm", "bedrock", "region"),
+                (("llm", "bedrock", "region"),)),
+    SettingSpec("bedrock_model_id", ("llm", "bedrock", "model_id"),
+                (("llm", "bedrock", "model_id"),)),
+    SettingSpec("bedrock_profile", ("llm", "bedrock", "profile"),
+                (("llm", "bedrock", "profile"),)),
+    SettingSpec("bedrock_endpoint_url", ("llm", "bedrock", "endpoint_url"),
+                (("llm", "bedrock", "endpoint_url"),)),
+)
+
+SETTING_NAMES: tuple[str, ...] = ("profile", *(spec.name for spec in SETTINGS))
+
+# Selecting a deployment or a Bedrock model id also sets session.model, unless
+# the caller named a model explicitly in the same update.
+_MODEL_ALIASES = ("azure_deployment", "bedrock_model_id")
+
+
+def _enum_value(value: Any) -> Any:
+    return value.value if isinstance(value, Enum) else value
+
+
+def _read_attr(cfg: AegisConfig, path: tuple[str, ...]) -> Any:
+    current: Any = cfg
+    for key in path:
+        current = getattr(current, key)
+    return _enum_value(current)
+
+
+def settings_payload(cfg: AegisConfig) -> dict[str, Any]:
+    """The settings surface as the UI sees it."""
+    payload: dict[str, Any] = {"profile": _read_attr(cfg, ("profile", "name"))}
+    for spec in SETTINGS:
+        payload[spec.name] = _read_attr(cfg, spec.source)
+    return payload
+
+
+def apply_settings(cfg: AegisConfig, updates: Mapping[str, Any]) -> AegisConfig:
+    """Return a copy of cfg with the named settings applied.
+
+    Keys absent from ``updates`` (or set to None) are left untouched, so a
+    partial payload is a partial update.
+    """
+    for name in updates:
+        if name not in SETTING_NAMES:
+            log.warning("ignoring unknown setting %r", name)
+
     data = cfg.model_dump(mode="json")
+    profile = updates.get("profile")
     if profile is not None:
         _switch_profile_defaults(data, cfg, profile)
-    if provider is not None:
-        data["session"]["provider"] = provider
-        data["llm"]["chat_provider"] = provider
-    if model is not None:
-        data["session"]["model"] = model
-    if voice is not None:
-        data["session"]["voice"] = voice
-    if reasoning_effort is not None:
-        data["session"]["reasoning_effort"] = reasoning_effort
-    if max_session_cost_usd is not None:
-        data["session"]["max_session_cost_usd"] = float(max_session_cost_usd)
-    if max_duration_s is not None:
-        data["session"]["max_duration_s"] = int(max_duration_s)
-    if idle_timeout_s is not None:
-        data["session"]["idle_timeout_s"] = int(idle_timeout_s)
-    if api_key_env is not None:
-        data["openai"]["api_key_env"] = api_key_env
-        data["llm"]["openai"]["api_key_env"] = api_key_env
-    if realtime_url is not None:
-        data["openai"]["realtime_url"] = realtime_url
-        data["llm"]["openai"]["realtime_url"] = realtime_url
-    if openai_chat_base_url is not None:
-        data["openai"]["chat_base_url"] = openai_chat_base_url
-        data["llm"]["openai"]["chat_base_url"] = openai_chat_base_url
-    if log_level is not None:
-        data["app"]["log_level"] = log_level
-    if litellm_base_url is not None:
-        data["llm"]["litellm"]["base_url"] = litellm_base_url
-    if litellm_api_key_env is not None:
-        data["llm"]["litellm"]["api_key_env"] = litellm_api_key_env
-    if litellm_model is not None:
-        data["llm"]["litellm"]["model"] = litellm_model
-    if ollama_base_url is not None:
-        data["llm"]["ollama"]["base_url"] = ollama_base_url
-    if ollama_native_base_url is not None:
-        data["llm"]["ollama"]["native_base_url"] = ollama_native_base_url
-    if ollama_model is not None:
-        data["llm"]["ollama"]["model"] = ollama_model
-    if chatgpt_token_path is not None:
-        data["llm"]["chatgpt_oauth"]["token_path"] = chatgpt_token_path
-    if temperature is not None:
-        data["llm"]["temperature"] = float(temperature)
-    if max_tokens is not None:
-        data["llm"]["max_tokens"] = int(max_tokens)
-    if azure_endpoint is not None:
-        data["llm"]["azure_openai"]["endpoint"] = azure_endpoint
-    if azure_api_key_env is not None:
-        data["llm"]["azure_openai"]["api_key_env"] = azure_api_key_env
-    if azure_api_version is not None:
-        data["llm"]["azure_openai"]["api_version"] = azure_api_version
-    if azure_deployment is not None:
-        data["llm"]["azure_openai"]["deployment"] = azure_deployment
-        # Keep session.model aligned when saving Azure deployment
-        if model is None:
-            data["session"]["model"] = azure_deployment
-    if azure_api_style is not None:
-        data["llm"]["azure_openai"]["api_style"] = azure_api_style
-    if azure_auth_mode is not None:
-        data["llm"]["azure_openai"]["auth_mode"] = azure_auth_mode
-    if bedrock_region is not None:
-        data["llm"]["bedrock"]["region"] = bedrock_region
-    if bedrock_model_id is not None:
-        data["llm"]["bedrock"]["model_id"] = bedrock_model_id
-        if model is None:
-            data["session"]["model"] = bedrock_model_id
-    if bedrock_profile is not None:
-        data["llm"]["bedrock"]["profile"] = bedrock_profile
-    if bedrock_endpoint_url is not None:
-        data["llm"]["bedrock"]["endpoint_url"] = bedrock_endpoint_url
+
+    for spec in SETTINGS:
+        value = updates.get(spec.name)
+        if value is None:
+            continue
+        if spec.coerce is not None:
+            value = spec.coerce(value)
+        for target in spec.targets:
+            _set_path(data, target, value)
+
+    if updates.get("model") is None:
+        for alias in _MODEL_ALIASES:
+            value = updates.get(alias)
+            if value is not None:
+                data["session"]["model"] = value
+
     return AegisConfig.model_validate(data)
+
+
+def apply_llm_settings(cfg: AegisConfig, **updates: Any) -> AegisConfig:
+    """Keyword-argument wrapper around :func:`apply_settings` (back-compat)."""
+    return apply_settings(cfg, updates)

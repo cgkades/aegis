@@ -337,75 +337,41 @@
       });
     }
 
+    // Injected by the server from config.save.SETTING_NAMES — the same table the
+    // GET payload and the save handler use. Adding a field there (and an input
+    // with a matching id) is all it takes; this page needs no edit.
+    const SETTING_NAMES = __AEGIS_SETTING_NAMES__;
+
     function fillForm(s) {
-      $("profile").value = s.profile || "mvp";
-      $("provider").value = s.provider || "realtime";
-      $("model").value = s.model || "";
-      $("voice").value = s.voice || "alloy";
-      $("reasoning_effort").value = s.reasoning_effort || "minimal";
-      $("temperature").value = s.temperature ?? 0.4;
-      $("max_tokens").value = s.max_tokens ?? 2048;
-      $("max_session_cost_usd").value = s.max_session_cost_usd ?? 2;
-      $("max_duration_s").value = s.max_duration_s ?? 900;
-      $("idle_timeout_s").value = s.idle_timeout_s ?? 45;
-      $("log_level").value = s.log_level || "info";
-      $("api_key_env").value = s.api_key_env || "OPENAI_API_KEY";
-      $("realtime_url").value = s.realtime_url || "";
-      $("openai_chat_base_url").value = s.openai_chat_base_url || "https://api.openai.com/v1";
-      $("litellm_base_url").value = s.litellm_base_url || "";
-      $("litellm_api_key_env").value = s.litellm_api_key_env || "LITELLM_API_KEY";
-      $("litellm_model").value = s.litellm_model || "";
-      $("ollama_base_url").value = s.ollama_base_url || "";
-      $("ollama_native_base_url").value = s.ollama_native_base_url || "";
-      $("ollama_model").value = s.ollama_model || "";
-      $("chatgpt_token_path").value = s.chatgpt_token_path || "";
-      $("azure_endpoint").value = s.azure_endpoint || "";
-      $("azure_api_key_env").value = s.azure_api_key_env || "AZURE_OPENAI_API_KEY";
-      $("azure_api_version").value = s.azure_api_version || "2024-10-21";
-      $("azure_deployment").value = s.azure_deployment || "";
-      $("azure_api_style").value = s.azure_api_style || "deployments";
-      $("azure_auth_mode").value = s.azure_auth_mode || "api_key";
-      $("bedrock_region").value = s.bedrock_region || "us-east-1";
-      $("bedrock_model_id").value = s.bedrock_model_id || "";
-      $("bedrock_profile").value = s.bedrock_profile || "";
-      $("bedrock_endpoint_url").value = s.bedrock_endpoint_url || "";
+      s = s || {};
+      for (const name of SETTING_NAMES) {
+        const el = $(name);
+        if (!el) continue;
+        const value = s[name];
+        // Leave the markup's own default in place when the server has nothing
+        // to say, rather than keeping a second copy of the defaults here.
+        if (value === undefined || value === null) continue;
+        el.value = value;
+      }
       showPanel($("provider").value);
     }
 
     function formPayload() {
-      return {
-        profile: $("profile").value,
-        provider: $("provider").value,
-        model: $("model").value.trim(),
-        voice: $("voice").value,
-        reasoning_effort: $("reasoning_effort").value,
-        temperature: Number($("temperature").value),
-        max_tokens: Number($("max_tokens").value),
-        max_session_cost_usd: Number($("max_session_cost_usd").value),
-        max_duration_s: Number($("max_duration_s").value),
-        idle_timeout_s: Number($("idle_timeout_s").value),
-        log_level: $("log_level").value,
-        api_key_env: $("api_key_env").value.trim() || "OPENAI_API_KEY",
-        realtime_url: $("realtime_url").value.trim(),
-        openai_chat_base_url: $("openai_chat_base_url").value.trim(),
-        litellm_base_url: $("litellm_base_url").value.trim(),
-        litellm_api_key_env: $("litellm_api_key_env").value.trim(),
-        litellm_model: $("litellm_model").value.trim(),
-        ollama_base_url: $("ollama_base_url").value.trim(),
-        ollama_native_base_url: $("ollama_native_base_url").value.trim(),
-        ollama_model: $("ollama_model").value.trim(),
-        chatgpt_token_path: $("chatgpt_token_path").value.trim(),
-        azure_endpoint: $("azure_endpoint").value.trim(),
-        azure_api_key_env: $("azure_api_key_env").value.trim(),
-        azure_api_version: $("azure_api_version").value.trim(),
-        azure_deployment: $("azure_deployment").value.trim(),
-        azure_api_style: $("azure_api_style").value,
-        azure_auth_mode: $("azure_auth_mode").value,
-        bedrock_region: $("bedrock_region").value.trim(),
-        bedrock_model_id: $("bedrock_model_id").value.trim(),
-        bedrock_profile: $("bedrock_profile").value.trim(),
-        bedrock_endpoint_url: $("bedrock_endpoint_url").value.trim(),
-      };
+      const out = {};
+      for (const name of SETTING_NAMES) {
+        const el = $(name);
+        if (!el) continue;
+        if (el.type === "number") {
+          const n = Number(el.value);
+          if (Number.isFinite(n)) out[name] = n;
+        } else if (el.tagName === "SELECT") {
+          out[name] = el.value;
+        } else {
+          out[name] = el.value.trim();
+        }
+      }
+      if (!out.api_key_env) out.api_key_env = "OPENAI_API_KEY";
+      return out;
     }
 
     function renderEnv(env, paths) {
