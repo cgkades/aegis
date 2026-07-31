@@ -21,6 +21,7 @@ from aegis.config import AegisConfig, ConfigError, default_paths, load_config
 from aegis.config.paths import AegisPaths
 from aegis.ipc import (
     IpcResponse,
+    check_socket_path,
     parse_request,
     pid_alive,
     read_pid,
@@ -42,6 +43,10 @@ log = get_logger("daemon")
 # Capture reads time out after 0.2s, so this is ~30s of uninterrupted silence
 # before we call the input stream degraded.
 _SILENT_READS_BEFORE_DEGRADED = 150
+
+
+class DaemonStartError(RuntimeError):
+    """Startup precondition failed — reported as a message, not a traceback."""
 
 
 @dataclass(slots=True)
@@ -90,8 +95,20 @@ class AegisDaemon:
 
     async def start(self) -> None:
         self.paths.ensure_dirs()
-        remove_stale_socket(self.paths.socket_path)
-        write_pid(self.paths.pid_file)
+        # Fail with an actionable message instead of a bare OSError out of
+        # asyncio's socket bind.
+        path_error = check_socket_path(self.paths.socket_path)
+        if path_error:
+            raise DaemonStartError(path_error)
+        # Refuses if another daemon is still serving this socket; unlinking it
+        # would strand that daemon holding the microphone with no control
+        # channel. This is the case the PID-file guard misses — a cleaned state
+        # dir, or a PID file lost to a crash. The PID file is written only after
+        # we own the socket, so a failed start never leaves a stale one behind.
+        try:
+            remove_stale_socket(self.paths.socket_path)
+        except OSError as exc:
+            raise DaemonStartError(str(exc)) from exc
 
         if self.cfg.wake.enabled:
             try:
@@ -139,12 +156,22 @@ class AegisDaemon:
                 self._handle_client,
                 path=str(self.paths.socket_path),
             )
+        except OSError as exc:
+            # The wake engine and capture stream are already running by now;
+            # a failed bind must not leave them holding the microphone.
+            self._release_audio()
+            raise DaemonStartError(
+                f"could not bind control socket {self.paths.socket_path}: {exc}"
+            ) from exc
         finally:
             os.umask(old_umask)
         try:
             os.chmod(self.paths.socket_path, 0o600)
         except OSError:
             pass
+
+        # Only now do we own the socket: claim the PID file.
+        write_pid(self.paths.pid_file)
 
         log.info(
             "aegisd listening on %s (wake=%s)",
@@ -162,6 +189,18 @@ class AegisDaemon:
                 await wake_task
             await self._shutdown()
 
+    def _release_audio(self) -> None:
+        """Stop the capture stream and wake engine. Safe to call more than once."""
+        with self._wake_lock:
+            if self._graph is not None:
+                with contextlib.suppress(Exception):
+                    self._graph.stop()
+                self._graph = None
+            if self._wake is not None:
+                with contextlib.suppress(Exception):
+                    self._wake.stop()
+                self._wake = None
+
     async def _shutdown(self) -> None:
         if self._session_task and not self._session_task.done():
             self._session_task.cancel()
@@ -170,13 +209,12 @@ class AegisDaemon:
         if self._server:
             self._server.close()
             await self._server.wait_closed()
-        with self._wake_lock:
-            if self._graph:
-                self._graph.stop()
-            if self._wake:
-                with contextlib.suppress(Exception):
-                    self._wake.stop()
-        remove_stale_socket(self.paths.socket_path)
+        self._release_audio()
+        # The server is closed, so nothing is serving this path any more; the
+        # liveness probe inside remove_stale_socket will agree. Suppress anyway
+        # — shutdown must not raise past this point.
+        with contextlib.suppress(OSError):
+            remove_stale_socket(self.paths.socket_path)
         if self.paths.pid_file.is_file():
             with contextlib.suppress(OSError):
                 self.paths.pid_file.unlink()
@@ -584,6 +622,13 @@ def run_daemon(
 
     try:
         loop.run_until_complete(daemon.start())
+    except DaemonStartError as exc:
+        # A too-long socket path or a socket already served by a live daemon is
+        # not fixed by restarting, so exit 78 (EX_CONFIG) — the unit's
+        # RestartPreventExitStatus stops the crash loop.
+        print(f"aegisd: {exc}", file=sys.stderr)
+        log.error("daemon start failed: %s", exc)
+        return 78
     finally:
         loop.close()
     return 0

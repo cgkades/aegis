@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import os
+import socket
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -42,7 +43,12 @@ class IpcResponse:
 
 def parse_request(line: str) -> IpcRequest:
     data = json.loads(line)
-    params = data.get("params") if isinstance(data.get("params"), dict) else {}
+    if not isinstance(data, dict):
+        # Valid JSON of the wrong shape used to surface as an AttributeError
+        # ("'str' object has no attribute 'get'") on the wire.
+        raise ValueError("request must be a JSON object")
+    raw_params = data.get("params")
+    params: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
     # Early approval clients sent their fields at the top level. Preserve that
     # wire form while normalizing all handlers onto ``params``.
     for key in ("call_id", "allow", "allowed", "scope", "grant_scope", "reason"):
@@ -87,12 +93,55 @@ async def send_request(
             await writer.wait_closed()
 
 
+# sockaddr_un.sun_path is 108 bytes on Linux including the NUL terminator.
+# Binding a longer path fails with a bare OSError from deep inside asyncio.
+_SUN_PATH_MAX = 107
+
+
+def check_socket_path(path: Path) -> str | None:
+    """Return an actionable error if ``path`` cannot be used for an AF_UNIX socket."""
+    encoded = len(str(path).encode("utf-8"))
+    if encoded > _SUN_PATH_MAX:
+        return (
+            f"control socket path is {encoded} bytes, over the {_SUN_PATH_MAX}-byte "
+            f"AF_UNIX limit: {path}. Set XDG_STATE_HOME to a shorter directory."
+        )
+    return None
+
+
+def socket_is_live(path: Path, *, timeout: float = 0.5) -> bool:
+    """Whether something is already accepting connections on ``path``.
+
+    Used before reclaiming a socket file: unlinking unconditionally would steal
+    the control channel from a running daemon, leaving it holding the
+    microphone with no way to reach it.
+    """
+    if not path.exists():
+        return False
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        sock.connect(str(path))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
 def remove_stale_socket(path: Path) -> None:
-    if path.exists():
-        try:
-            path.unlink()
-        except OSError as exc:
-            log.warning("could not remove stale socket %s: %s", path, exc)
+    """Remove a socket file left by a dead daemon.
+
+    Refuses to remove one that is still being served — see :func:`socket_is_live`.
+    """
+    if not path.exists():
+        return
+    if socket_is_live(path):
+        raise OSError(f"control socket {path} is already served by a live daemon")
+    try:
+        path.unlink()
+    except OSError as exc:
+        log.warning("could not remove stale socket %s: %s", path, exc)
 
 
 def write_pid(path: Path, pid: int | None = None) -> None:

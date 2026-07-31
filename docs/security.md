@@ -74,4 +74,13 @@ a shared or unattended room, and do not enable shell or kubectl on one.
 
 ## Audit
 
-JSONL under `~/.local/share/aegis/audit/YYYY-MM-DD.jsonl`.
+JSONL under `~/.local/share/aegis/audit/YYYY-MM-DD.jsonl`, one file per UTC day,
+mode 0600. Every string field is passed through secret-shape redaction.
+
+Recorded: session start/end, every tool call and its decision, human approval
+outcomes (allow/deny, grant scope, whether it came from the CLI or IPC), remote
+MCP activity, private-URL opt-ins, and mid-tool disconnects.
+
+`privacy.audit_retention_days` defaults to `0`, meaning **keep everything**. On a
+daemon that runs continuously that grows without bound; set a retention window
+or prune the directory externally.

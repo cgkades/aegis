@@ -197,7 +197,8 @@ def start_device_auth(
     )
     if not user_code:
         # Some deployments return nested data
-        nested = data.get("data") if isinstance(data.get("data"), dict) else {}
+        raw_nested = data.get("data")
+        nested = raw_nested if isinstance(raw_nested, dict) else {}
         user_code = str(nested.get("user_code") or nested.get("userCode") or "")
         device_id = device_id or str(
             nested.get("device_auth_id") or nested.get("deviceAuthId") or ""

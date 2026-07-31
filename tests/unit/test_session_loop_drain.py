@@ -282,11 +282,11 @@ async def test_cost_cap_can_trip_while_a_tool_is_running(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_pump_failure_propagates_out_of_run(monkeypatch) -> None:
-    """A tool-loop error still ends the session rather than being swallowed."""
+async def test_tool_bug_propagates_out_of_run(monkeypatch) -> None:
+    """A genuine handler bug must still surface, not end the session quietly."""
 
     async def exploding_tool(call, **kwargs) -> ToolResult:
-        raise RuntimeError("realtime session not connected")
+        raise RuntimeError("something is badly wrong in the handler")
 
     monkeypatch.setattr(runner_mod, "handle_tool_call", exploding_tool)
 
@@ -302,8 +302,94 @@ async def test_pump_failure_propagates_out_of_run(monkeypatch) -> None:
             tool_call=ToolCallRequest(call_id="c1", name="boom", arguments={}),
         )
     )
-    with pytest.raises(RuntimeError, match="not connected"):
+    with pytest.raises(RuntimeError, match="badly wrong"):
         await asyncio.wait_for(run_task, timeout=2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        RuntimeError("realtime session not connected"),
+        ConnectionError("mcp docs: transport closed"),
+    ],
+    ids=["voice_disconnect", "mcp_disconnect"],
+)
+async def test_disconnect_mid_tool_ends_the_session_cleanly(monkeypatch, exc) -> None:
+    """A dropped transport is a routine network event, not a crash.
+
+    DESIGN.md requires failing the tool and ending, rather than surfacing a
+    traceback to the user for a blip.
+    """
+
+    async def dropping_tool(call, **kwargs) -> ToolResult:
+        raise exc
+
+    monkeypatch.setattr(runner_mod, "handle_tool_call", dropping_tool)
+
+    cfg = build_config({"session": {"idle_timeout_s": 300, "max_duration_s": 300}})
+    session = _ScriptedSession()
+    machine = _active_machine()
+    loop = _make_loop(session, _RecordingGraph(), machine, cfg)
+
+    run_task = asyncio.create_task(loop.run())
+    session.queue.put_nowait(
+        VoiceEvent(
+            type=VoiceEventType.TOOL_CALL,
+            tool_call=ToolCallRequest(call_id="c1", name="reader", arguments={}),
+        )
+    )
+    # Completes without raising.
+    await asyncio.wait_for(run_task, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_disconnect_mid_tool_is_audited(monkeypatch, tmp_path) -> None:
+    import json
+
+    from aegis.audit.log import AuditLogger
+
+    async def dropping_tool(call, **kwargs) -> ToolResult:
+        raise RuntimeError("realtime session not connected")
+
+    monkeypatch.setattr(runner_mod, "handle_tool_call", dropping_tool)
+
+    cfg = build_config({"session": {"idle_timeout_s": 300, "max_duration_s": 300}})
+    audit = AuditLogger(tmp_path / "audit")
+    session = _ScriptedSession()
+    loop = _SessionLoop(
+        session=session,
+        graph=_RecordingGraph(),
+        machine=_active_machine(),
+        registry=_StubRegistry(),
+        cfg=cfg,
+        context=ContextManager(cfg.session.context),
+        metrics=SessionMetrics(model=cfg.session.model),
+        status=StatusPresenter(chime_on_wake=False, chime_on_connecting=False),
+        audit=audit,
+        stop=asyncio.Event(),
+        deadline=time.monotonic() + 30,
+        uplink_task=None,
+        interactive_approval=False,
+        approval_handler=None,
+        auto_end_mock=False,
+    )
+    run_task = asyncio.create_task(loop.run())
+    session.queue.put_nowait(
+        VoiceEvent(
+            type=VoiceEventType.TOOL_CALL,
+            tool_call=ToolCallRequest(call_id="c1", name="reader", arguments={}),
+        )
+    )
+    await asyncio.wait_for(run_task, timeout=2)
+
+    events = [
+        json.loads(line)
+        for path in (tmp_path / "audit").glob("*.jsonl")
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert any(e["event_type"] == "session_disconnected" for e in events), events
 
 
 # --------------------------------------------------------------------------- #

@@ -307,6 +307,19 @@ async def run_session_once(
 _UPLINK_ACTIVE_STATES = {SessionState.ACTIVE, SessionState.APPROVAL_PENDING}
 
 
+def _is_disconnect(exc: BaseException) -> bool:
+    """Whether an exception means the voice transport is gone.
+
+    Adapters signal this with RuntimeError("… not connected"); the MCP client
+    raises ConnectionError. Matched narrowly so a genuine bug in a tool handler
+    still surfaces as a failure rather than a quiet session end.
+    """
+    if isinstance(exc, ConnectionError):
+        return True
+    text = str(exc).lower()
+    return "not connected" in text or "connection closed" in text
+
+
 def _safe_console(text: str) -> str:
     """Escape-strip text before printing it to the operator's terminal.
 
@@ -537,6 +550,24 @@ class _SessionLoop:
                 cost,
             )
 
+    def _handle_disconnect(self, call: ToolCallRequest, exc: Exception) -> None:
+        """A dropped transport mid-tool ends the session, it is not a crash.
+
+        The result cannot be delivered — the remote call stays unanswered — so
+        there is nothing to retry. Record it and end cleanly instead of letting
+        the RuntimeError surface as a traceback on a routine network blip.
+        """
+        log.warning("tool %s lost the session mid-call: %s", call.name, exc)
+        if self._audit is not None:
+            self._audit.log(
+                "session_disconnected",
+                session_id=self._machine.context.session_id,
+                tool_name=call.name,
+                decision="aborted",
+                error=str(exc),
+            )
+        self._stop.set()
+
     async def _tool_worker(self) -> None:
         while True:
             call = await self._tool_calls.get()
@@ -552,6 +583,11 @@ class _SessionLoop:
                     approval_handler=self._approval_handler,
                 )
                 self._context.add_tool_result(call.name, result.output)
+            except (ConnectionError, RuntimeError) as exc:
+                if not _is_disconnect(exc):
+                    raise
+                self._handle_disconnect(call, exc)
+                return
             finally:
                 self._tools_in_flight -= 1
                 self._last_activity = time.monotonic()

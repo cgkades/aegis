@@ -143,6 +143,10 @@ store_transcripts = false
 store_audio = false
 audio_debug_buffer = false
 redact_secrets_in_audit = true
+# Days of audit JSONL to keep. 0 keeps everything, which on an always-on daemon
+# grows without bound — set a retention window if you are not pruning the
+# directory some other way.
+audit_retention_days = 0
 
 [observability]
 metrics_enabled = true
