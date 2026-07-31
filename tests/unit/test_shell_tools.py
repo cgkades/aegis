@@ -29,7 +29,11 @@ async def test_run_command_ok(tmp_path: Path) -> None:
     r = await handle_run_command({"argv": ["pwd"]}, tools=tools)
     if r.is_error and "unknown" in r.output:
         pytest.skip("pwd not found")
-    # pwd might auto
+    # pwd is in the default read-only ruleset, so it runs unprompted and the
+    # child must be spawned in the configured workdir, not the process CWD.
+    assert not r.is_error, r.output
+    assert r.decision == "auto"
+    assert str(tmp_path.resolve()) in r.output
 
 
 @pytest.mark.asyncio

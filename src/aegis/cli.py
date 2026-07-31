@@ -522,9 +522,12 @@ name = "mvp"
 log_level = "info"
 
 [wake]
-enabled = true
-engine = "openwakeword"
-phrase = "hey_aegis"
+# Disabled by default: openwakeword pins tflite-runtime, which has no wheels for
+# Python 3.12+. Install pvporcupine (`uv sync --extra porcupine`), set
+# PICOVOICE_ACCESS_KEY, then flip this to true.
+enabled = false
+engine = "porcupine"
+phrase = "porcupine"
 confirm_speech_timeout_s = 1.5
 
 [session]
@@ -540,7 +543,8 @@ enabled = false
 enabled = false
 
 [privacy]
-store_transcripts = true
+# Reserved — transcript/audio persistence is not implemented yet.
+store_transcripts = false
 store_audio = false
 """
 

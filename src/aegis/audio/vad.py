@@ -66,7 +66,12 @@ class EnergyVad:
             self._speech_run_samples += n
             if self._speech_run_samples >= self._min_speech_samples:
                 self._in_speech = True
-            self._hangover_samples_left = self._hangover_samples
+            # Only arm hangover once the run actually qualifies as speech.
+            # Arming it unconditionally made min_speech_ms dead: a single loud
+            # frame (a keypress, a cough) opened the uplink for the full
+            # hangover window.
+            if self._in_speech:
+                self._hangover_samples_left = self._hangover_samples
         else:
             self._speech_run_samples = 0
             if self._hangover_samples_left > 0:

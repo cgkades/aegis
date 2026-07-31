@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -14,6 +15,9 @@ from aegis.tools.policy import (
     resolve_tool_path,
 )
 from aegis.tools.types import ToolResult, ToolSpec, err_json
+
+# Upper bound on directory entries a single search may visit.
+_SEARCH_MAX_ENTRIES = 50_000
 
 
 async def handle_list_dir(
@@ -105,24 +109,41 @@ async def handle_search_files(
         return gated
 
     base = resolve_tool_path(root, tools)
-    matches: list[str] = []
-    try:
-        for p in base.rglob(pattern):
-            # Skip directory-symlink escapes: only report files whose resolved
-            # path remains inside the sandbox workdir.
-            try:
-                if not p.is_file():
+
+    def _walk() -> list[str] | OSError:
+        matches: list[str] = []
+        visited = 0
+        try:
+            for p in base.rglob(pattern):
+                # Bound the walk by entries *visited*, not matches found: a
+                # sparse pattern otherwise scans the whole tree before the
+                # match cap can ever fire.
+                visited += 1
+                if visited > _SEARCH_MAX_ENTRIES:
+                    break
+                # Skip directory-symlink escapes: only report files whose
+                # resolved path remains inside the sandbox workdir.
+                try:
+                    if not p.is_file():
+                        continue
+                    resolved = p.resolve()
+                except OSError:
                     continue
-                resolved = p.resolve()
-            except OSError:
-                continue
-            if not path_inside_workdir(resolved, tools):
-                continue
-            matches.append(str(resolved))
-            if len(matches) >= 200:
-                break
-    except OSError as exc:
-        return ToolResult(output=err_json("search_failed", detail=str(exc)), is_error=True)
+                if not path_inside_workdir(resolved, tools):
+                    continue
+                matches.append(str(resolved))
+                if len(matches) >= 200:
+                    break
+        except OSError as exc:
+            return exc
+        return matches
+
+    # A recursive walk of a user-configured workdir can take seconds on a large
+    # tree or cold disk; keep it off the loop that is streaming mic audio.
+    walked = await asyncio.to_thread(_walk)
+    if isinstance(walked, OSError):
+        return ToolResult(output=err_json("search_failed", detail=str(walked)), is_error=True)
+    matches = walked
 
     return ToolResult(
         output=json.dumps({"matches": matches}, indent=2),

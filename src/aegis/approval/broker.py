@@ -46,6 +46,12 @@ class ApprovalBroker:
             return await asyncio.wait_for(asyncio.shield(fut), timeout=self._timeout_s)
         except TimeoutError:
             log.warning("approval timeout call_id=%s", req.call_id)
+            # Resolve the future here, before the finally block's `async with`
+            # yields to the loop. Otherwise a respond() landing in that window
+            # sets a result nobody consumes and reports "approved" to the
+            # operator for a call the session already denied.
+            if not fut.done():
+                fut.set_result(ApprovalResponse(False, reason="timeout"))
             return ApprovalResponse(False, reason="timeout")
         finally:
             async with self._lock:

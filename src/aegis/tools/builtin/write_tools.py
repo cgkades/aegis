@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from aegis.config.schema import ToolsConfig
@@ -119,7 +120,17 @@ async def handle_apply_patch(
 
     target = resolve_tool_path(path, tools)
     try:
-        text = target.read_text(encoding="utf-8")
+        # Size-check before reading: read_file caps its output, but this path
+        # would happily pull a multi-hundred-MB file into memory (three times
+        # over, once replaced) on the event loop.
+        size = target.stat().st_size
+        if size > tools.max_write_bytes:
+            return ToolResult(
+                output=err_json("file_too_large", size=size, limit=tools.max_write_bytes),
+                is_error=True,
+                risk="write",
+            )
+        text = await asyncio.to_thread(target.read_text, encoding="utf-8")
     except OSError as exc:
         return ToolResult(
             output=err_json("read_failed", detail=str(exc)), is_error=True, risk="write"

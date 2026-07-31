@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from aegis.config.schema import SessionContextConfig
+from aegis.tools.sanitize import sanitize_tool_output, wrap_untrusted
 from aegis.util.logging import get_logger
 
 log = get_logger("session.context")
@@ -30,7 +31,10 @@ class ContextManager:
 
     def add_tool_result(self, name: str, output: str) -> None:
         cap = self.config.max_tool_result_chars_retained
-        digest = output[:cap]
+        # Sanitize at storage time. Retained tool output is attacker-controlled
+        # and snapshot_for_prompt() exists to put it back into a prompt, so it
+        # must not be held in raw form waiting for a caller to appear.
+        digest = sanitize_tool_output(output, max_bytes=max(1024, cap * 4))[:cap]
         if len(output) > cap:
             digest += "…[truncated]"
         self.tool_results.append({"name": name, "output": digest})
@@ -61,5 +65,10 @@ class ContextManager:
         if self.tool_results:
             parts.append("## Recent tool results")
             for tr in self.tool_results[-5:]:
-                parts.append(f"### {tr['name']}\n{tr['output'][:1500]}")
+                # Fence retained tool output exactly as the live path does.
+                # Re-injecting it into a prompt unfenced would hand the model
+                # attacker-controlled text with no untrusted marking at all.
+                parts.append(
+                    f"### {tr['name']}\n{wrap_untrusted(tr['output'], max_bytes=1500)}"
+                )
         return "\n".join(parts)

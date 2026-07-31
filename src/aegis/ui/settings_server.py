@@ -15,8 +15,19 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from aegis.config import default_paths, load_config
-from aegis.config.env import env_status, load_dotenv, project_root, write_env_key
-from aegis.config.save import apply_llm_settings, save_config
+from aegis.config.env import (
+    ALLOWED_ENV_KEYS,
+    env_status,
+    load_dotenv,
+    project_root,
+    write_env_key,
+)
+from aegis.config.save import (
+    SETTING_NAMES,
+    apply_settings,
+    save_config,
+    settings_payload,
+)
 from aegis.llm import chatgpt_oauth as chatgpt_oauth_mod
 from aegis.llm.chatgpt_oauth import clear_tokens, login_with_device_code, save_manual_token
 from aegis.llm.registry import list_provider_catalog, probe_provider
@@ -42,74 +53,12 @@ _MAX_JSON_BODY_BYTES = 256 * 1024
 _MAX_ENV_KEY_BODY_BYTES = 8 * 1024
 
 # secrets.env is for API keys / provider credentials — not arbitrary process env.
-_ALLOWED_ENV_KEYS = frozenset(
-    {
-        "OPENAI_API_KEY",
-        "OPENAI_BASE_URL",
-        "LITELLM_API_KEY",
-        "LITELLM_BASE_URL",
-        "AZURE_OPENAI_API_KEY",
-        "AZURE_OPENAI_ENDPOINT",
-        "AZURE_OPENAI_API_VERSION",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "AWS_REGION",
-        "AWS_DEFAULT_REGION",
-        "BEDROCK_API_KEY",
-        "PICOVOICE_ACCESS_KEY",
-        "ANTHROPIC_API_KEY",
-        "GOOGLE_API_KEY",
-        "GROQ_API_KEY",
-        "TOGETHER_API_KEY",
-        "MISTRAL_API_KEY",
-        "COHERE_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "XAI_API_KEY",
-        "OLLAMA_API_KEY",
-        "OLLAMA_HOST",
-    }
-)
+# Shared with the dotenv loader so the write and read paths cannot drift.
+_ALLOWED_ENV_KEYS = ALLOWED_ENV_KEYS
 
 
-def _settings_dict(cfg) -> dict[str, Any]:
-    return {
-        "profile": cfg.profile.name.value
-        if hasattr(cfg.profile.name, "value")
-        else str(cfg.profile.name),
-        "provider": cfg.session.provider.value
-        if hasattr(cfg.session.provider, "value")
-        else str(cfg.session.provider),
-        "model": cfg.session.model,
-        "voice": cfg.session.voice,
-        "reasoning_effort": cfg.session.reasoning_effort,
-        "max_session_cost_usd": cfg.session.max_session_cost_usd,
-        "max_duration_s": cfg.session.max_duration_s,
-        "idle_timeout_s": cfg.session.idle_timeout_s,
-        "log_level": cfg.app.log_level,
-        "api_key_env": cfg.openai.api_key_env,
-        "realtime_url": cfg.openai.realtime_url,
-        "openai_chat_base_url": cfg.openai.chat_base_url,
-        "temperature": cfg.llm.temperature,
-        "max_tokens": cfg.llm.max_tokens,
-        "litellm_base_url": cfg.llm.litellm.base_url,
-        "litellm_api_key_env": cfg.llm.litellm.api_key_env,
-        "litellm_model": cfg.llm.litellm.model,
-        "ollama_base_url": cfg.llm.ollama.base_url,
-        "ollama_native_base_url": cfg.llm.ollama.native_base_url,
-        "ollama_model": cfg.llm.ollama.model,
-        "chatgpt_token_path": cfg.llm.chatgpt_oauth.token_path,
-        "azure_endpoint": cfg.llm.azure_openai.endpoint,
-        "azure_api_key_env": cfg.llm.azure_openai.api_key_env,
-        "azure_api_version": cfg.llm.azure_openai.api_version,
-        "azure_deployment": cfg.llm.azure_openai.deployment,
-        "azure_api_style": cfg.llm.azure_openai.api_style,
-        "azure_auth_mode": cfg.llm.azure_openai.auth_mode,
-        "bedrock_region": cfg.llm.bedrock.region,
-        "bedrock_model_id": cfg.llm.bedrock.model_id,
-        "bedrock_profile": cfg.llm.bedrock.profile,
-        "bedrock_endpoint_url": cfg.llm.bedrock.endpoint_url,
-    }
+# Derived from the one settings table in config.save, not a parallel copy.
+_settings_dict = settings_payload
 
 
 def _paths_info() -> dict[str, str]:
@@ -215,8 +164,10 @@ class SettingsHandler(BaseHTTPRequestHandler):
             return
 
         if path in {"/", "/settings", "/index.html"}:
-            html = _HTML_PATH.read_text(encoding="utf-8").replace(
-                "__AEGIS_CSRF_TOKEN__", _CSRF_TOKEN
+            html = (
+                _HTML_PATH.read_text(encoding="utf-8")
+                .replace("__AEGIS_CSRF_TOKEN__", _CSRF_TOKEN)
+                .replace("__AEGIS_SETTING_NAMES__", json.dumps(list(SETTING_NAMES)))
             )
             self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
             return
@@ -235,7 +186,20 @@ class SettingsHandler(BaseHTTPRequestHandler):
             log.exception("settings GET api error")
             self._json(500, {"error": str(exc)})
 
+    # GETs that spawn a subprocess or make an outbound request with the user's
+    # credentials. A cross-origin page can issue a CORS-simple GET at loopback
+    # and, while it cannot read the response, the side effect still happens —
+    # so these need the same CSRF token the POSTs use.
+    _SIDE_EFFECTING_GETS = frozenset({"/api/probe", "/api/doctor"})
+
     def _do_get_api(self, path: str, qs: dict[str, list[str]]) -> None:
+        if path in self._SIDE_EFFECTING_GETS and not self._csrf_ok():
+            self._json(403, {"error": "bad_csrf"})
+            return
+        if (self.headers.get("Sec-Fetch-Site") or "").lower() == "cross-site":
+            self._json(403, {"error": "cross_site"})
+            return
+
         if path == "/api/probe":
             load_dotenv()
             cfg = load_config(missing_ok=True)
@@ -281,40 +245,7 @@ class SettingsHandler(BaseHTTPRequestHandler):
                 load_dotenv()
                 paths = default_paths()
                 cfg = load_config(paths=paths, missing_ok=True)
-                updated = apply_llm_settings(
-                    cfg,
-                    profile=body.get("profile"),
-                    provider=body.get("provider"),
-                    model=body.get("model"),
-                    voice=body.get("voice"),
-                    reasoning_effort=body.get("reasoning_effort"),
-                    max_session_cost_usd=body.get("max_session_cost_usd"),
-                    max_duration_s=body.get("max_duration_s"),
-                    idle_timeout_s=body.get("idle_timeout_s"),
-                    api_key_env=body.get("api_key_env"),
-                    realtime_url=body.get("realtime_url"),
-                    log_level=body.get("log_level"),
-                    openai_chat_base_url=body.get("openai_chat_base_url"),
-                    litellm_base_url=body.get("litellm_base_url"),
-                    litellm_api_key_env=body.get("litellm_api_key_env"),
-                    litellm_model=body.get("litellm_model"),
-                    ollama_base_url=body.get("ollama_base_url"),
-                    ollama_native_base_url=body.get("ollama_native_base_url"),
-                    ollama_model=body.get("ollama_model"),
-                    chatgpt_token_path=body.get("chatgpt_token_path"),
-                    temperature=body.get("temperature"),
-                    max_tokens=body.get("max_tokens"),
-                    azure_endpoint=body.get("azure_endpoint"),
-                    azure_api_key_env=body.get("azure_api_key_env"),
-                    azure_api_version=body.get("azure_api_version"),
-                    azure_deployment=body.get("azure_deployment"),
-                    azure_api_style=body.get("azure_api_style"),
-                    azure_auth_mode=body.get("azure_auth_mode"),
-                    bedrock_region=body.get("bedrock_region"),
-                    bedrock_model_id=body.get("bedrock_model_id"),
-                    bedrock_profile=body.get("bedrock_profile"),
-                    bedrock_endpoint_url=body.get("bedrock_endpoint_url"),
-                )
+                updated = apply_settings(cfg, body)
                 save_config(updated, paths.config_file)
                 payload = _full_settings_payload()
                 payload["ok"] = True
@@ -330,6 +261,8 @@ class SettingsHandler(BaseHTTPRequestHandler):
                     raise ValueError("key and value required")
                 if any(c in key for c in " =\n\r"):
                     raise ValueError("invalid key name")
+                if any(c in value for c in "\n\r\x00"):
+                    raise ValueError("value must not contain newlines")
                 if key not in _ALLOWED_ENV_KEYS and not (
                     key.endswith("_API_KEY") or key.endswith("_ACCESS_KEY")
                 ):

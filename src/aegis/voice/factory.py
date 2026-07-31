@@ -6,6 +6,7 @@ from typing import Any
 
 from aegis.config.schema import AegisConfig, SessionProvider
 from aegis.util.secrets import resolve_api_key
+from aegis.voice.capabilities import is_text_only, normalize_provider
 from aegis.voice.gateway import CloudAudioGateway, default_gateway
 from aegis.voice.gpt_live import GptLiveVoiceSession
 from aegis.voice.mock import MockVoiceSession
@@ -25,8 +26,9 @@ def create_voice_session(
 ) -> VoiceSession:
     """Create a voice/chat session for the configured or explicit backend."""
     gw = gateway or default_gateway
-    provider = backend if backend is not None else cfg.session.provider.value
-    provider = str(provider).lower().replace("-", "_")
+    provider = normalize_provider(
+        backend if backend is not None else cfg.session.provider.value
+    )
 
     if provider in {"mock"}:
         return MockVoiceSession(
@@ -43,17 +45,7 @@ def create_voice_session(
         return TextFallbackSession(cfg=cfg)
 
     # Chat / OpenAI-compatible providers → text chat session
-    if provider in {
-        "ollama",
-        "litellm",
-        "chatgpt_oauth",
-        "openai_api",
-        "azure_openai",
-        "azure",
-        "bedrock",
-        "aws_bedrock",
-        "hybrid_text_tools",
-    }:
+    if is_text_only(provider):
         from aegis.llm.chat_session import ChatLLMSession
 
         # hybrid_text_tools may point chat at llm.chat_provider when set.

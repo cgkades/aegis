@@ -37,8 +37,9 @@ def test_main_module_as_main() -> None:
                 runpy.run_module("aegis", run_name="__main__")
             except SystemExit as e:
                 assert e.code in (0, None)
-            # If no SystemExit, main was still invoked via import guard
-            assert m.called or True
+            # The whole point of the __main__ guard: running the module as a
+            # script must dispatch to cli.main.
+            assert m.called
 
 
 def test_azure_url_styles() -> None:
@@ -146,8 +147,9 @@ def test_cli_config_summary_and_validate() -> None:
     r2 = runner.invoke(main, ["config", "validate"])
     assert r2.exit_code == 0
     r3 = runner.invoke(main, ["config", "init", "--force"])
-    # may write or skip
-    assert r3.exit_code in {0, 1, 2}
+    assert r3.exit_code == 0
+    # --force rewrites the file, and what it writes must still validate.
+    assert runner.invoke(main, ["config", "validate"]).exit_code == 0
 
 
 def test_cli_auth_help() -> None:
@@ -187,7 +189,7 @@ def test_settings_more_endpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         try:
             urllib.request.urlopen(f"http://127.0.0.1:{port}/api/nope")
         except urllib.error.HTTPError as e:
-            assert e.code in {404, 500}
+            assert e.code == 404
 
         # CSRF wrong token
         import re
@@ -220,7 +222,7 @@ def test_settings_more_endpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
             )
             raise AssertionError("expected 400/500")
         except urllib.error.HTTPError as e:
-            assert e.code in {400, 500}
+            assert e.code == 400
 
         # body too large
         big = {"key": "OPENAI_API_KEY", "value": "v" * 20_000}
@@ -228,7 +230,7 @@ def test_settings_more_endpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
             post("/api/env-key", big, csrf=token)
             raise AssertionError("expected body too large")
         except urllib.error.HTTPError as e:
-            assert e.code in {400, 500}
+            assert e.code == 400
 
         # test-mock endpoint if present
         try:
@@ -290,6 +292,7 @@ def test_remote_mcp_public_included() -> None:
                         {
                             "label": "pub",
                             "server_url": "https://example.com/mcp",
+                            "allowed_tools": ["search"],
                         }
                     ]
                 }

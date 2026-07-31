@@ -60,6 +60,7 @@ def test_private_url_allowed_with_flag() -> None:
                             "label": "local",
                             "server_url": "http://127.0.0.1:9/mcp",
                             "allow_private_server_url": True,
+                            "allowed_tools": ["search"],
                         }
                     ]
                 }

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import threading
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -39,9 +40,12 @@ class AuditEvent:
             if key not in data:
                 data[key] = value
         if redact:
-            for key in ("args_summary", "result_summary", "error"):
-                if isinstance(data.get(key), str):
-                    data[key] = redact_secrets(data[key])
+            # Redact every string field, not just the three well-known ones:
+            # `extra` carries caller-supplied values (exception text, session
+            # reports) that can contain key material the named fields never see.
+            for key, value in data.items():
+                if isinstance(value, str):
+                    data[key] = redact_secrets(value)
         # Drop nulls for compact lines
         return {k: v for k, v in data.items() if v is not None}
 
@@ -55,15 +59,40 @@ class AuditLogger:
         *,
         redact: bool = True,
         enabled: bool = True,
+        retention_days: int = 0,
     ) -> None:
         self.directory = directory
         self.redact = redact
         self.enabled = enabled
+        # 0 keeps everything. Anything else prunes on the first write of a new
+        # day so a 24/7 daemon does not accumulate JSONL files forever.
+        self.retention_days = int(retention_days)
         self._lock = threading.Lock()
+        self._pruned_for: str | None = None
 
     def _path_for_today(self) -> Path:
         day = datetime.now(UTC).strftime("%Y-%m-%d")
         return self.directory / f"{day}.jsonl"
+
+    def prune(self, *, today: str) -> int:
+        """Delete audit files older than ``retention_days``. Returns count removed."""
+        if self.retention_days <= 0:
+            return 0
+        cutoff = datetime.now(UTC).date() - timedelta(days=self.retention_days)
+        removed = 0
+        for path in self.directory.glob("*.jsonl"):
+            try:
+                day = datetime.strptime(path.stem, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if day < cutoff:
+                try:
+                    path.unlink()
+                except OSError:
+                    continue
+                removed += 1
+        self._pruned_for = today
+        return removed
 
     def write(self, event: AuditEvent) -> Path | None:
         if not self.enabled:
@@ -72,6 +101,9 @@ class AuditLogger:
         path = self._path_for_today()
         line = json.dumps(event.to_dict(redact=self.redact), ensure_ascii=False)
         with self._lock:
+            if self.retention_days > 0 and self._pruned_for != path.stem:
+                with contextlib.suppress(OSError):
+                    self.prune(today=path.stem)
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
             try:

@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both interpreters the package claims to support.
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        # Deliberately without the `audio` extra: sounddevice needs PortAudio
+        # and a device, and the daemon is built to degrade without it. Running
+        # CI in that configuration keeps the no-audio path honest — the suite
+        # passes and still clears the coverage gate there.
+        run: uv sync --extra dev --python ${{ matrix.python-version }}
+
+      - name: Lint
+        run: uv run ruff check src tests
+
+      - name: Test
+        # pytest addopts already enforce --cov-fail-under=80.
+        run: uv run pytest -q
+
+      - name: Smoke-test the CLI
+        # Catches import-level breakage that unit tests can miss.
+        run: |
+          uv run aegis --version
+          uv run aegis config show --format summary

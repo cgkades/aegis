@@ -163,9 +163,11 @@ def test_capture_queue_full_and_read() -> None:
             cap._queue.put_nowait(frame)
     except Exception:
         pass
-    # drop oldest path if any
+    # The queue is full, so a read must return one of the buffered frames
+    # rather than timing out.
     got = cap.read(timeout=0.05)
-    assert got is not None or got is None
+    assert got is not None
+    assert len(got) == len(frame)
 
 
 def test_settings_oauth_and_test_chat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -218,16 +220,24 @@ def test_settings_oauth_and_test_chat(tmp_path: Path, monkeypatch: pytest.Monkey
             data = json.loads(resp.read().decode())
             assert data.get("ok") is True
 
+        def get(path: str):
+            # /api/probe and /api/doctor have side effects, so they carry the
+            # CSRF token like the POSTs do.
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}{path}",
+                headers={"X-Aegis-CSRF": token},
+                method="GET",
+            )
+            return urllib.request.urlopen(req)
+
         # probe endpoint
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/api/probe?provider=mock"
-        ) as resp:
+        with get("/api/probe?provider=mock") as resp:
             _ = resp.read()
 
         # doctor endpoint (spawns real process — may be slow but ok)
         with patch("aegis.ui.settings_server.subprocess.run") as run:
             run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/doctor") as resp:
+            with get("/api/doctor") as resp:
                 d = json.loads(resp.read().decode())
                 assert d.get("ok") is True
 

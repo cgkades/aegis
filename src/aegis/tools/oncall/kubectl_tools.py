@@ -79,6 +79,33 @@ _EXTRA_FLAGS_WITH_VALUE = _SAFE_EXTRA_FLAGS - {
     "--timestamps",
 }
 
+# `-o` is not a presentation-only flag by default: kubectl's `go-template-file`,
+# `jsonpath-file`, `custom-columns-file` and `templatefile` formats read an
+# arbitrary *local* file and render it to stdout, which would hand the model any
+# file the daemon can read (no sandbox, no secrets glob, and `get` is read-class
+# so it never prompts). Only these formats are accepted.
+_OUTPUT_BARE_FORMATS = frozenset({"json", "yaml", "wide", "name"})
+_OUTPUT_EXPR_FORMATS = frozenset(
+    {"custom-columns", "jsonpath", "jsonpath-as-json", "go-template"}
+)
+# --sort-by takes a JSONPath expression; keep it to a conservative charset so it
+# cannot grow flag-like or path-like shapes.
+_SORT_BY_RE = re.compile(r"^\{?\.?[A-Za-z0-9_.\[\]'\"\-]*\}?$")
+
+
+def _valid_flag_value(flag: str, value: str) -> bool:
+    """Validate the value a safe flag consumes (not just the flag name)."""
+    if flag in {"-o", "--output"}:
+        fmt, separator, expr = value.partition("=")
+        if fmt in _OUTPUT_BARE_FORMATS:
+            return not separator
+        if fmt in _OUTPUT_EXPR_FORMATS:
+            return bool(separator and expr)
+        return False
+    if flag == "--sort-by":
+        return bool(value) and _SORT_BY_RE.match(value) is not None
+    return True
+
 
 async def handle_kubectl(
     arguments: dict[str, Any],
@@ -125,20 +152,36 @@ async def handle_kubectl(
 
     # Validate shape/policy before approval prompts so bad requests deny without
     # user interaction (banned flags, sandbox, charset, allowlists).
+    # Fail closed. An empty allowlist means "no model-chosen cluster" (fall back to
+    # the kubeconfig current-context), not "any cluster": `allowed_namespaces` is
+    # useless as a blast-radius control if the model can point the same namespace
+    # at a production context.
     if kcfg.context_allowlist:
-        if not isinstance(context, str) or not context or context not in kcfg.context_allowlist:
-            return ToolResult(
-                output=json.dumps(
-                    {
-                        "error": "context_not_allowed",
-                        "context": context if isinstance(context, str) else "",
-                        "allowed": kcfg.context_allowlist,
-                    }
-                ),
-                is_error=True,
-                risk=risk,
-                decision="deny",
-            )
+        context_ok = (
+            isinstance(context, str) and bool(context) and context in kcfg.context_allowlist
+        )
+    else:
+        context_ok = context is None or context == ""
+    if not context_ok:
+        return ToolResult(
+            output=json.dumps(
+                {
+                    "error": "context_not_allowed",
+                    "context": context if isinstance(context, str) else "",
+                    "allowed": kcfg.context_allowlist,
+                }
+            ),
+            is_error=True,
+            risk=risk,
+            decision="deny",
+        )
+    if isinstance(context, str) and context and not _NAME_RE.match(context):
+        return ToolResult(
+            output=json.dumps({"error": "invalid_context", "context": context}),
+            is_error=True,
+            risk=risk,
+            decision="deny",
+        )
 
     if resource:
         bad = _invalid_positional("resource", resource, _RESOURCE_RE, risk=risk)
@@ -322,6 +365,9 @@ def _safe_extra_args(extra: list[str]) -> bool:
                 index += 1
                 if index >= len(extra) or extra[index].startswith("-"):
                     return False
+                value = extra[index]
+            if not _valid_flag_value(flag, value):
+                return False
         elif separator:
             return False
         index += 1
@@ -360,6 +406,9 @@ def kubectl_tool_specs() -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             risk="read",
+            # Real risk depends on the verb (get → read, delete → destroy);
+            # handle_kubectl prompts for anything mutating.
+            dynamic_risk=True,
             handler=handle_kubectl,
             env_allowlist=("KUBECONFIG", "KUBECTL_CONTEXT", "KUBERNETES_MASTER"),
         )

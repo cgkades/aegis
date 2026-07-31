@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from aegis.approval.broker import ApprovalBroker
 from aegis.audio import AudioGraph, AudioGraphConfig, sounddevice_available
 from aegis.audit import AuditLogger
@@ -19,6 +21,7 @@ from aegis.config import AegisConfig, ConfigError, default_paths, load_config
 from aegis.config.paths import AegisPaths
 from aegis.ipc import (
     IpcResponse,
+    check_socket_path,
     parse_request,
     pid_alive,
     read_pid,
@@ -27,14 +30,23 @@ from aegis.ipc import (
 )
 from aegis.session.events import SessionState, Trigger
 from aegis.session.machine import SessionMachine
-from aegis.session.runner import TEXT_ONLY_BACKENDS, run_session_once
+from aegis.session.runner import run_session_once
 from aegis.util.logging import get_logger, setup_logging
+from aegis.voice.capabilities import is_text_only, is_unimplemented
 from aegis.voice.gateway import default_gateway
 from aegis.wake import ConfirmSpeechGate
-from aegis.wake.base import WakeEngine
+from aegis.wake.base import WakeEngine, WakeEvent
 from aegis.wake.factory import create_wake_engine
 
 log = get_logger("daemon")
+
+# Capture reads time out after 0.2s, so this is ~30s of uninterrupted silence
+# before we call the input stream degraded.
+_SILENT_READS_BEFORE_DEGRADED = 150
+
+
+class DaemonStartError(RuntimeError):
+    """Startup precondition failed — reported as a message, not a traceback."""
 
 
 @dataclass(slots=True)
@@ -69,6 +81,7 @@ class AegisDaemon:
         self._wake_lock = threading.RLock()
         self._wake_generation = 0
         self._wake_config_restart_required = False
+        self._silent_reads = 0
         self._confirm = ConfirmSpeechGate(
             timeout_s=cfg.wake.confirm_speech_timeout_s,
             sample_rate_hz=cfg.audio.wake_sample_rate_hz,
@@ -76,13 +89,26 @@ class AegisDaemon:
         self.audit = AuditLogger(
             paths.audit_dir,
             redact=cfg.privacy.redact_secrets_in_audit,
+            retention_days=cfg.privacy.audit_retention_days,
         )
         self.approvals = ApprovalBroker(timeout_s=cfg.tools.approval.timeout_s)
 
     async def start(self) -> None:
         self.paths.ensure_dirs()
-        remove_stale_socket(self.paths.socket_path)
-        write_pid(self.paths.pid_file)
+        # Fail with an actionable message instead of a bare OSError out of
+        # asyncio's socket bind.
+        path_error = check_socket_path(self.paths.socket_path)
+        if path_error:
+            raise DaemonStartError(path_error)
+        # Refuses if another daemon is still serving this socket; unlinking it
+        # would strand that daemon holding the microphone with no control
+        # channel. This is the case the PID-file guard misses — a cleaned state
+        # dir, or a PID file lost to a crash. The PID file is written only after
+        # we own the socket, so a failed start never leaves a stale one behind.
+        try:
+            remove_stale_socket(self.paths.socket_path)
+        except OSError as exc:
+            raise DaemonStartError(str(exc)) from exc
 
         if self.cfg.wake.enabled:
             try:
@@ -113,7 +139,12 @@ class AegisDaemon:
                 # unused output stream open 24/7 blocks device power-down.
                 self._graph.start(capture_only=True)
             except Exception as exc:
-                log.warning("capture unavailable: %s", exc)
+                # Wake is enabled but there is no microphone: the daemon is
+                # running deaf. Error level, because "started fine" in the
+                # journal is how this goes unnoticed for days. Under systemd,
+                # MemoryDenyWriteExecute=yes is a known cause on distros whose
+                # libffi lacks static trampolines (sounddevice uses cffi).
+                log.error("capture unavailable — wake word will not work: %s", exc)
                 self._graph = None
 
         # Restrict the socket's permissions from creation (not just after) so there
@@ -125,12 +156,22 @@ class AegisDaemon:
                 self._handle_client,
                 path=str(self.paths.socket_path),
             )
+        except OSError as exc:
+            # The wake engine and capture stream are already running by now;
+            # a failed bind must not leave them holding the microphone.
+            self._release_audio()
+            raise DaemonStartError(
+                f"could not bind control socket {self.paths.socket_path}: {exc}"
+            ) from exc
         finally:
             os.umask(old_umask)
         try:
             os.chmod(self.paths.socket_path, 0o600)
         except OSError:
             pass
+
+        # Only now do we own the socket: claim the PID file.
+        write_pid(self.paths.pid_file)
 
         log.info(
             "aegisd listening on %s (wake=%s)",
@@ -148,6 +189,18 @@ class AegisDaemon:
                 await wake_task
             await self._shutdown()
 
+    def _release_audio(self) -> None:
+        """Stop the capture stream and wake engine. Safe to call more than once."""
+        with self._wake_lock:
+            if self._graph is not None:
+                with contextlib.suppress(Exception):
+                    self._graph.stop()
+                self._graph = None
+            if self._wake is not None:
+                with contextlib.suppress(Exception):
+                    self._wake.stop()
+                self._wake = None
+
     async def _shutdown(self) -> None:
         if self._session_task and not self._session_task.done():
             self._session_task.cancel()
@@ -156,13 +209,12 @@ class AegisDaemon:
         if self._server:
             self._server.close()
             await self._server.wait_closed()
-        with self._wake_lock:
-            if self._graph:
-                self._graph.stop()
-            if self._wake:
-                with contextlib.suppress(Exception):
-                    self._wake.stop()
-        remove_stale_socket(self.paths.socket_path)
+        self._release_audio()
+        # The server is closed, so nothing is serving this path any more; the
+        # liveness probe inside remove_stale_socket will agree. Suppress anyway
+        # — shutdown must not raise past this point.
+        with contextlib.suppress(OSError):
+            remove_stale_socket(self.paths.socket_path)
         if self.paths.pid_file.is_file():
             with contextlib.suppress(OSError):
                 self.paths.pid_file.unlink()
@@ -194,7 +246,19 @@ class AegisDaemon:
                 with self._wake_lock:
                     if self._confirm.waiting and self._confirm.poll_timeout():
                         log.info("wake confirm timed out (no audio frames)")
+                # A dead capture stream (device unplug, PipeWire restart,
+                # suspend/resume) looks exactly like silence from here, so count
+                # the drought and say so — otherwise wake goes deaf while
+                # `aegis status` still reports it enabled.
+                self._silent_reads += 1
+                if self._silent_reads == _SILENT_READS_BEFORE_DEGRADED:
+                    log.error(
+                        "no audio frames for ~%.0fs — capture stream may be dead; "
+                        "wake word will not trigger until the daemon is restarted",
+                        _SILENT_READS_BEFORE_DEGRADED * 0.2,
+                    )
                 continue
+            self._silent_reads = 0
 
             # Resample + KWS off the event loop so IPC stays responsive (F018).
             try:
@@ -221,11 +285,16 @@ class AegisDaemon:
             else:
                 await self._start_session(source="wake", skip_confirm=True)
 
-    def _wake_process_frame(self, frame: object) -> tuple[object | None, object | None]:
-        """CPU-heavy wake path (runs in a worker thread)."""
+    def _wake_process_frame(
+        self, frame: np.ndarray
+    ) -> tuple[WakeEvent | None, WakeEvent | None]:
+        """CPU-heavy wake path (runs in a worker thread).
+
+        Returns ``(detection, confirmation)`` — at most one is ever set.
+        """
         with self._wake_lock:
             assert self._graph is not None and self._wake is not None
-            wake_pcm = self._graph.to_wake_rate(frame)  # type: ignore[arg-type]
+            wake_pcm = self._graph.to_wake_rate(frame)
             if self._confirm.waiting:
                 return None, self._confirm.process_audio(wake_pcm)
             return self._wake.process(wake_pcm), None
@@ -257,6 +326,7 @@ class AegisDaemon:
             self.audit = AuditLogger(
                 self.paths.audit_dir,
                 redact=cfg.privacy.redact_secrets_in_audit,
+                retention_days=cfg.privacy.audit_retention_days,
             )
             log.info("config reloaded profile=%s", cfg.profile.name.value)
             return ConfigReloadResult(cfg, restart_required=restart_required)
@@ -279,11 +349,19 @@ class AegisDaemon:
             }
         cfg = reload_result.cfg
         provider = str(cfg.session.provider.value)
-        if provider.lower().replace("-", "_") in TEXT_ONLY_BACKENDS:
+        if is_text_only(provider):
             return {
                 "started": False,
                 "reason": f"text_only_provider:{provider}",
-                "hint": "set session.provider to realtime, mock, or gpt_live",
+                "hint": "set session.provider to realtime or mock",
+            }
+        if is_unimplemented(provider):
+            # connect() raises NotImplementedError for these, so reporting
+            # started:true would hand the caller a session that is already dead.
+            return {
+                "started": False,
+                "reason": f"provider_not_implemented:{provider}",
+                "hint": "set session.provider to realtime or mock",
             }
 
         # The runner owns its own state machine. The daemon advances its own
@@ -294,7 +372,10 @@ class AegisDaemon:
             skip_confirm=skip_confirm,
         )
         self._wake_generation += 1
-        self.audit.log("session_request", extra={"source": source})
+        # One id for the whole session: the value returned over IPC below is the
+        # same one the runner puts on its tool_call and session_end records.
+        session_id = self.machine.context.session_id
+        self.audit.log("session_request", session_id=session_id, extra={"source": source})
 
         async def _run() -> int:
             try:
@@ -316,6 +397,7 @@ class AegisDaemon:
                     install_signal_handlers=False,
                     interactive_approval=False,
                     approval_handler=self.approvals.request,
+                    session_id=session_id,
                 )
                 return code
             finally:
@@ -341,7 +423,7 @@ class AegisDaemon:
         self._session_task.add_done_callback(self._on_session_done)
         return {
             "started": True,
-            "session_id": self.machine.context.session_id,
+            "session_id": session_id,
             "source": source,
         }
 
@@ -400,6 +482,9 @@ class AegisDaemon:
                     "state": "active" if busy else self.machine.state.value,
                     "session_id": self.machine.context.session_id,
                     "wake_enabled": self._wake is not None and self._graph is not None,
+                    # Wake is configured but no audio has arrived for a while:
+                    # the capture stream is probably dead.
+                    "wake_degraded": self._silent_reads >= _SILENT_READS_BEFORE_DEGRADED,
                     "wake_restart_required": self._wake_config_restart_required,
                     "cloud_open": default_gateway.is_open,
                     "pending_approvals": self.approvals.list_pending(),
@@ -537,6 +622,13 @@ def run_daemon(
 
     try:
         loop.run_until_complete(daemon.start())
+    except DaemonStartError as exc:
+        # A too-long socket path or a socket already served by a live daemon is
+        # not fixed by restarting, so exit 78 (EX_CONFIG) — the unit's
+        # RestartPreventExitStatus stops the crash loop.
+        print(f"aegisd: {exc}", file=sys.stderr)
+        log.error("daemon start failed: %s", exc)
+        return 78
     finally:
         loop.close()
     return 0

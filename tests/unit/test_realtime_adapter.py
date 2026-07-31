@@ -235,6 +235,12 @@ async def test_realtime_handle_mcp_event() -> None:
         await session.end()
         task.cancel()
 
+    # MCP server-side activity must surface to the session so the UI can show
+    # what the remote tool did.
+    activity = [e for e in events if e.type is VoiceEventType.REMOTE_TOOL_ACTIVITY]
+    assert activity, [e.type for e in events]
+    assert activity[0].message == "mcp_list_tools.completed"
+
 
 @pytest.mark.asyncio
 async def test_realtime_backpressure_preserves_queued_tool_calls() -> None:

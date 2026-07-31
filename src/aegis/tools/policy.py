@@ -162,7 +162,10 @@ def evaluate_run_command(argv: list[str] | Any, tools: ToolsConfig) -> PolicyRes
     # 5. Path args sandbox + secrets
     for path_arg in _extract_path_like_args(argv[1:]):
         try:
-            rp = Path(path_arg).expanduser().resolve()
+            # Resolve against the workdir, not the process CWD: run_argv spawns
+            # the child with cwd=working_directory, so anchoring here at CWD
+            # would sandbox-check a different file than the one that gets read.
+            rp = resolve_tool_path(path_arg, tools)
         except OSError:
             return PolicyResult(PolicyDecision.DENY, risk, "path_resolve_failed")
         if tools.sandbox_to_workdir and not _is_inside(rp, workdir):

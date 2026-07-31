@@ -46,6 +46,13 @@ async def handle_run_command(
     )
 
 
+def validate_run_command_args(arguments: dict[str, Any]) -> str | None:
+    """run_command takes argv and nothing else — reject other shapes early."""
+    if set(arguments.keys()) - {"argv"} or "argv" not in arguments:
+        return err_json("argv_only_schema")
+    return None
+
+
 def shell_tool_specs() -> list[ToolSpec]:
     return [
         ToolSpec(
@@ -56,6 +63,10 @@ def shell_tool_specs() -> list[ToolSpec]:
             ),
             parameters=RUN_COMMAND_PARAMETERS,
             risk="exec",
+            # Real risk comes from the argv policy: allowlisted read-only
+            # commands are auto, everything else prompts or denies.
+            dynamic_risk=True,
+            validate_args=validate_run_command_args,
             handler=handle_run_command,
         )
     ]

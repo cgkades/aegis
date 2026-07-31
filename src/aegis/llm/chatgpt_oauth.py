@@ -105,6 +105,23 @@ def status_dict(path: str | Path) -> dict[str, Any]:
     }
 
 
+class OAuthHTTPError(RuntimeError):
+    """HTTP failure from the OAuth endpoint, with the parsed error code.
+
+    Device-auth flows report both "keep polling" and terminal denials as HTTP
+    400; only the JSON ``error`` field distinguishes them.
+    """
+
+    def __init__(self, message: str, *, status: int, error_code: str = "") -> None:
+        super().__init__(message)
+        self.status = status
+        self.error_code = error_code
+
+
+# Device-flow error codes that mean "the user has not finished yet".
+_OAUTH_PENDING_CODES = frozenset({"authorization_pending", "slow_down"})
+
+
 def _http_json(
     method: str,
     url: str,
@@ -124,7 +141,18 @@ def _http_json(
             return json.loads(raw) if raw else {}
     except HTTPError as exc:
         err_body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"OAuth HTTP {exc.code}: {err_body[:400]}") from exc
+        error_code = ""
+        try:
+            parsed = json.loads(err_body)
+            if isinstance(parsed, dict):
+                error_code = str(parsed.get("error") or "")
+        except (ValueError, TypeError):
+            pass
+        raise OAuthHTTPError(
+            f"OAuth HTTP {exc.code}: {err_body[:400]}",
+            status=exc.code,
+            error_code=error_code,
+        ) from exc
     except URLError as exc:
         raise RuntimeError(f"OAuth network error: {exc.reason}") from exc
 
@@ -169,7 +197,8 @@ def start_device_auth(
     )
     if not user_code:
         # Some deployments return nested data
-        nested = data.get("data") if isinstance(data.get("data"), dict) else {}
+        raw_nested = data.get("data")
+        nested = raw_nested if isinstance(raw_nested, dict) else {}
         user_code = str(nested.get("user_code") or nested.get("userCode") or "")
         device_id = device_id or str(
             nested.get("device_auth_id") or nested.get("deviceAuthId") or ""
@@ -212,9 +241,28 @@ def poll_device_auth(
                     "user_code": session.user_code,
                 },
             )
+        except OAuthHTTPError as exc:
+            # Only keep polling for the two codes that mean "not yet". Treating
+            # every HTTP 400 as pending made access_denied / expired_token block
+            # for the full 15-minute deadline — and the settings-server request
+            # that called this hung with it.
+            if exc.error_code == "slow_down":
+                time.sleep(session.interval_s + 2)
+                continue
+            if exc.error_code in _OAUTH_PENDING_CODES:
+                time.sleep(session.interval_s)
+                continue
+            if not exc.error_code and exc.status == 400:
+                # No machine-readable code; fall back to the old substring probe
+                # rather than failing a server that just phrases it differently.
+                msg = str(exc).lower()
+                if "pending" in msg:
+                    time.sleep(session.interval_s)
+                    continue
+            raise
         except RuntimeError as exc:
             msg = str(exc).lower()
-            if "pending" in msg or "authorization_pending" in msg or " 400" in msg:
+            if "pending" in msg or "authorization_pending" in msg:
                 time.sleep(session.interval_s)
                 continue
             if "slow" in msg:

@@ -32,19 +32,36 @@ def rate_tier(model: str) -> str:
 
 
 def estimate_cost_usd(usage: UsageSnapshot, model: str) -> float:
+    """Estimate session spend in USD.
+
+    Cached input is re-priced per modality rather than discounted at a flat
+    rate: cached tokens are mostly *text* (instructions, tool schemas, history),
+    so discounting them all at the audio differential subtracts far more than
+    they ever cost and drives the estimate to the zero floor — taking
+    ``max_session_cost_usd`` enforcement down with it.
+    """
     rates = _RATES[rate_tier(model)]
-    # cached tokens discounted; non-cached input approximates total input - cached
     in_audio = max(0, usage.input_audio_tokens)
-    cached = max(0, usage.cached_input_tokens)
-    # Prefer charging cached portion at cached rate when possible
+    in_text = max(0, usage.input_text_tokens)
+    cached_total = max(0, usage.cached_input_tokens)
+    cached_audio = max(0, usage.cached_input_audio_tokens)
+    cached_text = max(0, usage.cached_input_text_tokens)
+
+    if cached_total and not (cached_audio or cached_text):
+        # Server did not break the cached total down. Attribute it to text
+        # first: text is the cheaper input class, so this under-discounts
+        # rather than under-reporting spend.
+        cached_text = min(cached_total, in_text)
+        cached_audio = min(cached_total - cached_text, in_audio)
+    cached_audio = min(cached_audio, in_audio)
+    cached_text = min(cached_text, in_text)
+
     cost = 0.0
-    cost += (in_audio / 1_000_000.0) * rates["input_audio"]
+    cost += ((in_audio - cached_audio) / 1_000_000.0) * rates["input_audio"]
+    cost += ((in_text - cached_text) / 1_000_000.0) * rates["input_text"]
+    cost += ((cached_audio + cached_text) / 1_000_000.0) * rates["cached_input"]
     cost += (usage.output_audio_tokens / 1_000_000.0) * rates["output_audio"]
-    cost += (usage.input_text_tokens / 1_000_000.0) * rates["input_text"]
     cost += (usage.output_text_tokens / 1_000_000.0) * rates["output_text"]
-    # Apply rough cached discount if present
-    if cached:
-        cost -= (cached / 1_000_000.0) * max(0.0, rates["input_audio"] - rates["cached_input"])
     return max(0.0, cost)
 
 

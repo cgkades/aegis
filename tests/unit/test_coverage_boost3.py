@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -265,4 +266,5 @@ def test_ipc_parse_and_pid(tmp_path: Path) -> None:
     p = tmp_path / "p.pid"
     write_pid(p, 1)
     assert read_pid(p) == 1
-    assert pid_alive(1) or not pid_alive(1)
+    assert pid_alive(os.getpid()) is True
+    assert pid_alive(4194303) is False
