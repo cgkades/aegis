@@ -21,7 +21,9 @@ class PlaybackConfig:
     device_rate_hz: int = 48000
     channels: int = 1
     dtype: str = "int16"
-    queue_size: int = 32
+    # A streamed response can arrive in short bursts. Keep enough audio buffered
+    # to absorb them rather than dropping earlier chunks and clipping syllables.
+    queue_size: int = 128
 
 
 class AudioPlayback:

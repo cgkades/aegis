@@ -30,6 +30,9 @@ class GptLiveVoiceSession:
     ) -> None:
         raise NotImplementedError("GPT-Live not available")
 
+    async def send_image(self, image_data_url: str) -> None:
+        raise NotImplementedError("GPT-Live not available")
+
     async def interrupt_agent(self) -> None:
         raise NotImplementedError("GPT-Live not available")
 

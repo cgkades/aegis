@@ -405,6 +405,12 @@ class ToolsKubectlConfig(BaseModel):
     )
 
 
+class ToolsWebConfig(BaseModel):
+    # Deliberate opt-in: enabling this bypasses the normal network approval prompt
+    # only for Aegis's bounded web-search and page-read tools.
+    auto_approve: bool = False
+
+
 class ToolsConfig(BaseModel):
     enabled: list[str] = Field(default_factory=lambda: ["fs"])
     # Least-privilege default: a dedicated workspace under XDG data, not all of $HOME.
@@ -422,6 +428,7 @@ class ToolsConfig(BaseModel):
     approval: ToolsApprovalConfig = Field(default_factory=ToolsApprovalConfig)
     git: ToolsGitConfig = Field(default_factory=ToolsGitConfig)
     kubectl: ToolsKubectlConfig = Field(default_factory=ToolsKubectlConfig)
+    web: ToolsWebConfig = Field(default_factory=ToolsWebConfig)
 
     @field_validator("working_directory")
     @classmethod

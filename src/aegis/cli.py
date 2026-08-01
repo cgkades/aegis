@@ -220,6 +220,7 @@ def config_show_cmd(ctx: click.Context, fmt: str) -> None:
     click.echo(f"session.model:        {cfg.session.model}")
     click.echo(f"session.cost_cap_usd: {cfg.session.max_session_cost_usd}")
     click.echo(f"tools.enabled:        {', '.join(cfg.tools.enabled)}")
+    click.echo(f"tools.web.auto_approve:{cfg.tools.web.auto_approve}")
     click.echo(f"tools.shell.enabled:  {cfg.tools.shell.enabled}")
     click.echo(f"tools.git.enabled:    {cfg.tools.git.enabled}")
     click.echo(f"tools.kubectl.enabled:{cfg.tools.kubectl.enabled}")

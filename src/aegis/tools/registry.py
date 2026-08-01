@@ -121,6 +121,11 @@ class ToolRegistry:
         approval_mode = self.tools_config.approval.default
         session_granted = self._is_session_granted(name, arguments)
         effective_approved = approved or session_granted
+        web_auto_approved = (
+            self.tools_config.web.auto_approve
+            and spec.source == "builtin"
+            and name in {"search_web", "read_web_page", "view_web_image"}
+        )
 
         # Global approval mode (schema tools.approval.default) — enforced here so
         # every tool pack shares one choke point. Handlers still apply path/argv
@@ -136,6 +141,7 @@ class ToolRegistry:
         if (
             approval_mode is ApprovalDefault.PROMPT_ALL
             and not effective_approved
+            and not web_auto_approved
         ):
             return ToolResult(
                 output=err_json("approval_required", reason="approval_default_prompt_all"),
@@ -154,6 +160,7 @@ class ToolRegistry:
             and not spec.dynamic_risk
             and spec.risk != "read"
             and not effective_approved
+            and not web_auto_approved
         ):
             return ToolResult(
                 output=err_json("approval_required", reason=f"risk_{spec.risk}"),

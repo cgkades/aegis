@@ -67,6 +67,8 @@ realtime_url = "wss://api.openai.com/v1/realtime"
 
 [tools]
 enabled = ["fs"]
+# Add "web" to enable on-demand DuckDuckGo search. Searches are network-risk
+# calls, so the default approval policy prompts before each request.
 # Every file under this directory is reachable by fs/write/shell tools. Setting
 # it to "~" hands the model your whole home directory; the default is a
 # dedicated workspace for a reason.
@@ -127,6 +129,11 @@ allowed_verbs = ["get", "describe", "logs", "top"]
 context_allowlist = []
 deny_via_shell = true
 env_allowlist = ["KUBECONFIG", "KUBECTL_CONTEXT", "KUBERNETES_MASTER"]
+
+[tools.web]
+# Bypass approval only for Aegis's bounded search_web and read_web_page tools.
+# Web pages remain untrusted data and cannot request local actions by themselves.
+auto_approve = false
 
 [mcp.local]
 # servers = []  # use [[mcp.local.servers]] entries when needed

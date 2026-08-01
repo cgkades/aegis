@@ -8,6 +8,7 @@ from aegis.tools.builtin.fs_tools import fs_tool_specs
 from aegis.tools.builtin.git_tools import git_tool_specs
 from aegis.tools.builtin.process_tools import process_tool_specs
 from aegis.tools.builtin.shell_tools import shell_tool_specs
+from aegis.tools.builtin.web_tools import web_tool_specs
 from aegis.tools.builtin.write_tools import write_tool_specs
 from aegis.tools.oncall.kubectl_tools import kubectl_tool_specs
 from aegis.tools.registry import ToolRegistry
@@ -46,6 +47,10 @@ def build_registry(
 
     if "write" in enabled:
         for spec in write_tool_specs():
+            reg.register(spec)
+
+    if "web" in enabled:
+        for spec in web_tool_specs():
             reg.register(spec)
 
     if "kubectl" in enabled and tools.kubectl.enabled:

@@ -149,6 +149,16 @@ async def handle_tool_call(
     # Wrap every result in untrusted-content delimiters and strip control/ANSI
     # escapes before it goes back to the model. Error outputs can contain stderr,
     # server responses, and filesystem-controlled text just as successful ones can.
+    image_data_url = result.meta.get("image_data_url")
+    if isinstance(image_data_url, str) and not result.is_error:
+        try:
+            await session.send_image(image_data_url)
+        except Exception as exc:
+            result = ToolResult(
+                output=json.dumps({"error": "image_delivery_failed", "detail": str(exc)}),
+                is_error=True,
+                risk="network",
+            )
     max_bytes = cfg.tools.max_output_bytes
     wire_output = wrap_untrusted(result.output, max_bytes=max_bytes)
     await session.send_tool_result(

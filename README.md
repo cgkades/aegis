@@ -130,6 +130,9 @@ uv run aegis --profile oncall session once --backend realtime
 ## Tools (mvp)
 
 - `list_dir`, `read_file`, `search_files`
+- Optional: `search_web`, `read_web_page`, `view_web_image` (DuckDuckGo search, public HTTPS
+  page text, and image inspection;
+  approval required by default, or opt in with `tools.web.auto_approve = true`)
 - Optional: `run_command` (argv-only, off by default)
 - `standard`: `git_*`, `list_processes`, `tail_log`, `env_info`, `write_file`, `apply_patch` (when `write` pack enabled)
 - `oncall`: structured `kubectl` (shell kubectl always denied)

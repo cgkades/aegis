@@ -143,6 +143,24 @@ async def test_realtime_requires_api_key() -> None:
 
 
 @pytest.mark.asyncio
+async def test_realtime_send_image_creates_untrusted_image_item() -> None:
+    fake = FakeWS()
+    session = RealtimeVoiceSession(api_key="sk-test")
+    session._connected = True
+    session._ws = fake
+
+    await session.send_image("data:image/png;base64,aW1hZ2U=")
+
+    item = fake.sent[0]["item"]
+    assert item["type"] == "message"
+    assert item["content"][1] == {
+        "type": "input_image",
+        "image_url": "data:image/png;base64,aW1hZ2U=",
+    }
+    assert "untrusted" in item["content"][0]["text"]
+
+
+@pytest.mark.asyncio
 async def test_realtime_connect_cancellation_closes_gateway() -> None:
     gateway = CloudAudioGateway()
     session = RealtimeVoiceSession(api_key="sk-test", gateway=gateway)

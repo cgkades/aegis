@@ -106,6 +106,10 @@ class MockVoiceSession:
             )
         )
 
+    async def send_image(self, image_data_url: str) -> None:
+        if not self._connected:
+            raise RuntimeError("mock session not connected")
+
     async def interrupt_agent(self) -> None:
         return None
 

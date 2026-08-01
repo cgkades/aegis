@@ -34,12 +34,16 @@ present while being defeatable), the other found the three *coverage* gaps
 
 ## Summary
 
-There is no web-search or URL-fetch tool in `src/aegis/`. The tool packs are
-fs, git, process, write, kubectl, shell and MCP; none performs an outbound HTTP
-request on the model's behalf. Web-sourced content therefore arrives by exactly
-one route: **remote MCP servers and connectors**, which are declared in the
-Realtime `session.update` payload and executed by the model provider's server,
-not by this process.
+The optional `web` tool pack performs bounded DuckDuckGo search, public HTTPS
+page reads, and Realtime image inspection. Page and image requests reject
+redirects, local/private destinations, unsupported content types, and oversized
+responses. They are classified as `network`, so the default approval policy
+prompts before every request; `tools.web.auto_approve` is an explicit opt-in for
+the built-in web tools only. Page text is sent through the local tool-result
+sanitizer and downloaded images are submitted with an explicit untrusted-data
+instruction. Remote MCP servers and connectors remain a separate route: they
+are declared in the Realtime `session.update` payload and executed by the model
+provider's server, not by this process.
 
 That is the central structural finding. `wrap_untrusted` is applied at a single
 choke point (`session/tool_loop.py`, the only caller of `send_tool_result`) and
